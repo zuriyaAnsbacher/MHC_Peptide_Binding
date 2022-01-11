@@ -1,0 +1,12 @@
+{
+  "root" : "HLA-A",
+  "version": "3",
+  "DEL_S" : ",",
+  "SEQ": "HLA_SEQ",
+  "HLA_or_Pep": "HLA",
+
+  "EPOCHS" : 1000,
+  "ENCODING_DIM" : 50,
+  "EMBEDDING_DIM": 15,
+  "BATCH_SIZE": 50
+}
