@@ -1,17 +1,21 @@
 {
   "root" : "HLA_Pep",
-  "datafile": "mhc_pep05_15perc_neg_PepLen7_11.csv",
-  "version": "3",
+  "datafile": "../Data/IEDB_processed/MHC_and_Pep/mhc_pep05_30percNeg_Pep7_11_2labels.csv",
+  "version": "4",
   "HLA_Header": "HLA Seq",
   "Pep_Header": "Pep",
   "Binding_Header": "Binding",
+  "Binary_Binding_Header": "Binary binding",
+  "Continuous_Binding_Header": "Continuous binding",
+  "Flag_Header": "Flag",
 
   "HLA_Model_path": "HLA-A_CNN_Results/CNN_version2/cnn_embedding=15_encoding=50.pt",
   "Pep_Model_path": "Pep_LSTM_Results/LSTM_last_output_1_layer_and_fc_lr=0.001_without_regularization/lstm_model_encoding_dim=20.pt",
 
-  "Saved_model_file": "fc1_32_relu_drop0^1_fc2_1.pt",
+  "Saved_model_file": "fc1_32_relu_drop0^1_2outputs.pt",
 
   "EPOCHS" : 250,
   "BATCH_SIZE": 50,
+  "Alpha": 0.5,
   "Pep_optional_len": [7, 8, 9, 10, 11]
 }

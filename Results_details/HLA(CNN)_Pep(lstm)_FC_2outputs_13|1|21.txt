@@ -1,0 +1,55 @@
+Script:
+    HLA_Pep_model_2outputs.py
+
+Hyper-parameters:
+    batch size: 50
+    epochs: 250
+    optimizer: Adam. parameters: only fc layers after the AEs
+    loss functions:
+        F.binary_cross_entropy_with_logits
+        F.mse_loss
+    alpha (coefficient to linear combination of loss functions): 0.5
+    counter of early stopping: 30
+    train size: 68% (0.8 * 0.85)
+    val size: 12% (0.8 * 0.15)
+    test size: 20%
+
+Model details:
+    Pep sequences were inserted to trained model: AE_lstm.
+        (Its details are in 'AE_lstm_Pep_2|12|21.txt'.
+        Model was loaded from: 'HLA-A_CNN_Results/CNN_version2/cnn_embedding=15_encoding=50.pt')
+    HLA sequences were inserted to trained model: AE_CNN.
+        (Its details are in 'AE_CNN_HLA_8|12|21.txt'.
+        Model was loaded from: 'Pep_LSTM_Results/LSTM_last_output_1_layer_and_fc_lr=0.001_without_regularization/lstm_model_encoding_dim=20.pt')
+
+    Then, the encoded sequences of HLA and pep were concatenated and insert to FC layers:
+        self.fc1 = nn.Sequential(
+            nn.Linear(self.encoding_dim_pep + self.encoding_dim_hla, 32),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+        )
+        self.fc2A = nn.Linear(32, 1)
+        self.fc2B = nn.Linear(32, 1)
+
+        2 last fc (fc2A, fc2B) are required because the model return 2 outputs: one is binary, one is continuous.
+        They are applied in parallel, and no one by one.
+        The first output should be with sigmoid, but because the loss function contains sigmoid, we do not put it in net.
+
+Data file:
+    mhc_pep05_30percNeg_Pep7_11_2labels.csv
+    (Original file: mhc_ligand_full_05.csv)
+    Processing done by:
+        - filtered by: Linear peptide, Homo sapiens (in Host column, not Epitope (unlike the previous models))
+        - peptides: remove artificial addition ('OVYLVMEL + OX(6M)' -> 'OVYLVMEL')
+        - peptides length: 7-11
+        - split each sample that has 2 classifications: binary and continuous, to 2 samples (one binary, one continuous)
+        - create negative samples randomly. ratio of ~ 66% positive, 33% negative
+    Finally, contains 168174 pairs of pep-hla. 167382 with binary labels, and 792 with continuous.
+
+Results:
+    Num epochs: 250 / 250
+    auc test:  0.9044  |  r2 test:  0.3169
+
+Path to results:
+        'Autoencoder/HLA_Pep_CNN_LSTM_FC_Results/CNN_LSTM_FC_version3'
+

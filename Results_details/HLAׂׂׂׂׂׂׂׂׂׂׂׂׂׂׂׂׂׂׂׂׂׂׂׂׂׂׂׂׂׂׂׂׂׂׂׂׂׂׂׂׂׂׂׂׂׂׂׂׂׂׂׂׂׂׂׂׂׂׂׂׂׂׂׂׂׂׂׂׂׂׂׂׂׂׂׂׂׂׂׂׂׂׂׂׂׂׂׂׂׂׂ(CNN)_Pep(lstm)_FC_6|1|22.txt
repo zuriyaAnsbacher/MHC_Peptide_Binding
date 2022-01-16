@@ -18,4 +18,4 @@ Results:
 
 
 Path to results:
-        'Autoencoder/HLA_Pep_CNN_LSTM_FC_Results/CNN_LSTM_FC_version2'
+    'Autoencoder/HLA_Pep_CNN_LSTM_FC_Results/CNN_LSTM_FC_version2'

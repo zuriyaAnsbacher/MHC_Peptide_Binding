@@ -1,5 +1,5 @@
 Script:
-    HLA_Pep_model.py
+    HLA_Pep_model_binary.py
 
 Hyper-parameters:
     batch size: 50
@@ -32,7 +32,7 @@ Data file:
     mhc_pep05_30perc_neg_PepLen9.csv
     (Original file: mhc_ligand_full_05.csv)
     Processing done by:
-        - filtered by: Linear peptide, Homo sapiens
+        - filtered by: Linear peptide, Homo sapiens (in Epitope column, not Host)
         - peptides: remove artificial addition ('OVYLVMEL + OX(6M)' -> 'OVYLVMEL')
         - only peptides with len = 9
         - labels conversion:
