@@ -5,7 +5,7 @@ import numpy as np
 import random
 
 PEP_HEAD = 'Pep'
-HLA_NAME_HEAD = 'HLA'
+HLA_NAME_HEAD = 'HLA name'
 HLA_SEQ_HEAD = 'HLA Seq'
 BIND_HEAD = 'Binding'
 BINARY_BIND_HEAD = 'Binary binding'
@@ -56,7 +56,8 @@ def different_hlaName_with_same_hlaSeq(seq_json, output_file):
 def clear_and_extract_data(df, labels_num):
     df = df[df[10] == 'Linear peptide']
     df = df[df[39].str.contains('human')]  # human Host (if want human epitope: it's in column 19)
-    df = df[df[95].str.contains(':')]  # for removing values such 'HLA class I', 'HLA-
+    df = df[df[95].str.contains(':')]  # for removing values such 'HLA class I', 'HLA-A'
+    df = df[~df[95].str.contains('mutant')]  # for removing values such 'A*02:01 K66A mutant'
 
     pep = df[11]
     hla = df[95]
@@ -75,7 +76,6 @@ def clear_and_extract_data(df, labels_num):
         new_df.columns = [PEP_HEAD, HLA_NAME_HEAD, BINARY_BIND_HEAD, CONT_BIND_HEAD]
 
     return new_df
-
 
 
 def pep_valid(df):
@@ -106,9 +106,13 @@ def drop_nan(df):
     return df
 
 
-def split_to_classes(df):  # classI, classII, and data with '/' (2 options for HLA, only in classII)
+def split_to_classes(df, only1allele):  # classI, classII, and data with '/' (2 options for HLA, only in classII)
     df_slash = df[df[HLA_NAME_HEAD].str.contains("/")]
-    df_classI = df[df[HLA_NAME_HEAD].str.contains('A\*|B\*|C\*')]
+    df_classI = df[df[HLA_NAME_HEAD].str.contains('A\*|B\*|C\*') & ~df[HLA_NAME_HEAD].str.contains("/")]
+
+    if only1allele:
+        df_classI = df_classI[df_classI[HLA_NAME_HEAD].str.contains(f'{only1allele}\*')]  # get only A or B or C
+
     df_classII = df[df[HLA_NAME_HEAD].str.contains('DR|DQ|DP') & ~df[HLA_NAME_HEAD].str.contains("/")]
 
     return df_slash, df_classI, df_classII
@@ -122,10 +126,11 @@ def add_sequences(df, seq_json, labels_num):
         seq_dict = json.load(file)
 
     df[HLA_SEQ_HEAD] = df.apply(name_to_seq, axis=1)
+
     if labels_num == 1:
-        df = df[[PEP_HEAD, HLA_SEQ_HEAD, BIND_HEAD]]
+        df = df[[PEP_HEAD, HLA_NAME_HEAD, HLA_SEQ_HEAD, BIND_HEAD]]
     elif labels_num == 2:
-        df = df[[PEP_HEAD, HLA_SEQ_HEAD, BINARY_BIND_HEAD, CONT_BIND_HEAD, FLAG_HEAD]]
+        df = df[[PEP_HEAD, HLA_NAME_HEAD, HLA_SEQ_HEAD, BINARY_BIND_HEAD, CONT_BIND_HEAD, FLAG_HEAD]]
 
     return df
 
@@ -189,18 +194,18 @@ def split_existing_examples(df, labels_num):
 def create_new_neg(all_pairs, pos_size, labels_num):
     examples = []
     i = 0
-    peps = [p for (p, h) in all_pairs]
-    hlas = [h for (p, h) in all_pairs]
-    while i < 0.5 * pos_size:  # ~ 66% pos, 33% neg. (existing neg samples in data is insignificant num)
+    peps = [p for (p, h_name, h_seq) in all_pairs]
+    hlas = [(h_name, h_seq) for (p, h_name, h_seq) in all_pairs]
+    while len(examples) < 0.3 * len(all_pairs):  # ~ 75% pos, 25% neg. (existing neg samples in data is insignificant num)
         single_pep = random.choice(peps)
         single_hla = random.choice(hlas)
 
         if labels_num == 1:
-            example = [single_pep, single_hla, 0]  # todo: check
+            example = [single_pep, single_hla[0], single_hla[1], 0]
         elif labels_num == 2:
-            example = [single_pep, single_hla, 0, -1, 0]  # last two: cont binding, flag todo: check
+            example = [single_pep, single_hla[0], single_hla[1], 0, -1, 0]  # last two: cont binding, flag
 
-        if (single_pep, single_hla) not in all_pairs and example not in examples:
+        if (single_pep, single_hla[0], single_hla[1]) not in all_pairs and example not in examples:
             examples.append(example)
             i += 1
 
@@ -211,22 +216,23 @@ def create_negative_samples(df, labels_num):
     all_pairs, pos_size, neg_size = split_existing_examples(df, labels_num)
     new_neg = create_new_neg(all_pairs, pos_size, labels_num)
     if labels_num == 1:
-        new_neg = pd.DataFrame(np.array(new_neg), columns=[PEP_HEAD, HLA_SEQ_HEAD, BIND_HEAD])
+        new_neg = pd.DataFrame(np.array(new_neg), columns=[PEP_HEAD, HLA_NAME_HEAD, HLA_SEQ_HEAD, BIND_HEAD])
     elif labels_num == 2:
-        new_neg = pd.DataFrame(np.array(new_neg), columns=[PEP_HEAD, HLA_SEQ_HEAD, BINARY_BIND_HEAD, CONT_BIND_HEAD, FLAG_HEAD])
+        new_neg = pd.DataFrame(np.array(new_neg), columns=[PEP_HEAD, HLA_NAME_HEAD, HLA_SEQ_HEAD, BINARY_BIND_HEAD, CONT_BIND_HEAD, FLAG_HEAD])
     all_data = pd.concat([df, new_neg], axis=0)
 
     return all_data
 
 
 def process():
-    part = '05'
+    part = '00'
+    specific_allele = 'A'  # A/B/C or None if want all three of them
 
     binary_or_binaryContinuous = 'binaryContinuous'
     labels_num = 1 if binary_or_binaryContinuous == 'binary' else 2
 
     input_file = f'../Data/IEDB_orig/MHC_and_Pep/mhc_ligand_full_{part}.csv'
-    output_file = f'../Data/IEDB_processed/MHC_and_Pep/mhc_pep{part}_30percNeg_Pep7_11_2labels.csv'
+    output_file = f'../Data/IEDB_processed/MHC_and_Pep/mhc_pep{part}{specific_allele}_25percNeg_Pep7_11_2labels.csv'
     seq_json = '../Data/HLA-I Seq/dict_seq.json'
 
     if part == '00':
@@ -236,7 +242,7 @@ def process():
 
     if binary_or_binaryContinuous == 'binary':
         df = clear_and_extract_data(df, labels_num)
-        _, df, _ = split_to_classes(df)  # get only HLA class I
+        _, df, _ = split_to_classes(df, only1allele=specific_allele)  # get only HLA class I
         df = pep_valid(df)
         df = drop_nan(df)
         df = convert_binding_to_binary(df, labels_num)
@@ -247,7 +253,7 @@ def process():
 
     elif binary_or_binaryContinuous == 'binaryContinuous':
         df = clear_and_extract_data(df, labels_num)
-        _, df, _ = split_to_classes(df)
+        _, df, _ = split_to_classes(df, only1allele=specific_allele)
         df = pep_valid(df)
         df = convert_binding_to_binary(df, labels_num)
         df = split_samples_to_labels(df)

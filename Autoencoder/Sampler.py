@@ -33,7 +33,7 @@ class SamplerByLength(Sampler):
                 data_buckets[sample_len] = [sample_idx]
 
         for k in data_buckets.keys():
-            data_buckets[k] = np.asarray(data_buckets[k])  # todo: change to np.array?
+            data_buckets[k] = np.asarray(data_buckets[k])
 
         iter_list = []
         for samples_same_len in data_buckets.values():
@@ -41,7 +41,8 @@ class SamplerByLength(Sampler):
             redundant_samples_num = samples_same_len.shape[0] % self.batch_size
             for i in range(redundant_samples_num):  # delete samples such that samples_same_len % batch_size = 0
                 samples_same_len = np.delete(samples_same_len, 0)
-            iter_list += (np.array_split(samples_same_len, (samples_same_len.shape[0] // self.batch_size)))
+            if samples_same_len.shape[0] >= self.batch_size:
+                iter_list += (np.array_split(samples_same_len, (samples_same_len.shape[0] // self.batch_size)))
         shuffle(iter_list)
 
         for i in iter_list:

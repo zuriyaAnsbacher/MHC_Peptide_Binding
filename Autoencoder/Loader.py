@@ -62,13 +62,15 @@ class HLAPepDataset(Dataset):
         return lst
 
 
+# with hla_oneHot for common HLAs
 class HLAPepDataset_2Labels(Dataset):
-    def __init__(self, data, headers, amino_pos_to_num):
+    def __init__(self, data, headers, hla_oneHot, amino_pos_to_num):
         self.data = data  # DataFrame
 
-        pep_header, hla_header, binary_header, cont_header, flag_header = headers
+        pep_header, hla_name_header, hla_seq_header, binary_header, cont_header, flag_header = headers
         self.pep_header = pep_header
-        self.hla_header = hla_header
+        self.hla_name_header = hla_name_header
+        self.hla_seq_header = hla_seq_header
         self.binary_header = binary_header
         self.cont_header = cont_header
         self.flag_header = flag_header
@@ -76,29 +78,41 @@ class HLAPepDataset_2Labels(Dataset):
         self.amino_pos_to_num = amino_pos_to_num
         self.amino_acids = [letter for letter in 'ARNDCEQGHILKMFPSTWYV']
         self.amino_to_ix = {amino: index for index, amino in enumerate(self.amino_acids)}
-        self.one_hot_map = self.get_one_hot_map()
+        self.pep_oneHot = self.get_oneHot_map_pep()
+
+        self.hla_oneHot = hla_oneHot
+        self.common_hla_oneHot = self.get_oneHot_common_hla()
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, index):
-        hla = self.data[self.hla_header][index]
         pep = self.data[self.pep_header][index]
+        hla_name = self.data[self.hla_name_header][index]
+        hla_seq = self.data[self.hla_seq_header][index]
         binary = self.data[self.binary_header][index]
         continuous = self.data[self.cont_header][index]
         flag = self.data[self.flag_header][index]
 
-        hla = self.convert_to_numeric(hla)
-        pep = self.convert_to_one_hot(pep)
-        continuous = np.log(continuous) if flag == 1 else continuous
+        hla = self.convert_to_numeric(hla_seq)
+        pep = self.convert_to_one_hot(pep, seq_type='pep')
+        continuous = np.log(continuous) if (flag == 1 and continuous != 0) else continuous
+        hla_oneHot = self.convert_to_one_hot(hla_name, seq_type='hla')
 
-        sample = (pep, hla, binary, continuous, flag)
+        sample = (pep, hla, binary, continuous, flag, hla_oneHot)
         return sample
 
-    def get_one_hot_map(self):
+    def get_oneHot_map_pep(self):
         one_hot = {a: [0] * 20 for a in self.amino_to_ix.keys()}
         for key in one_hot:
             one_hot[key][self.amino_to_ix[key]] = 1
+        return one_hot
+
+    def get_oneHot_common_hla(self):
+        one_hot = {hla_name: [0] * (len(self.hla_oneHot)) for hla_name in self.hla_oneHot.keys()}
+        for key in one_hot:
+            one_hot[key][self.hla_oneHot[key]] = 1
+        one_hot['else'] = [0] * (len(self.hla_oneHot))  # 0 vector for not common alleles
         return one_hot
 
     def convert_to_numeric(self, seq):
@@ -109,20 +123,29 @@ class HLAPepDataset_2Labels(Dataset):
             vec.append(self.amino_pos_to_num[pair])
         return vec
 
-    def convert_to_one_hot(self, seq):
+    def convert_to_one_hot(self, seq, seq_type):
         vec = []
-        for s in seq:
-            vec += self.one_hot_map[s]
+
+        if seq_type == 'pep':
+            for s in seq:
+                vec += self.pep_oneHot[s]
+
+        elif seq_type == 'hla':
+            if seq in self.common_hla_oneHot:
+                vec = self.common_hla_oneHot[seq]
+            else:
+                vec = self.common_hla_oneHot['else']  # vector 0
         return vec
 
     def collate(self, batch):
-        pep, hla, binary, continuous, flag = zip(*batch)
+        pep, hla, binary, continuous, flag, hla_oneHot = zip(*batch)
         lst = list()
         lst.append(torch.Tensor(pep))
         lst.append(torch.Tensor(hla))
         lst.append(torch.Tensor(binary))
         lst.append(torch.Tensor(continuous))
-        lst.append((torch.Tensor(flag)))
+        lst.append(torch.Tensor(flag))
+        lst.append(torch.Tensor(hla_oneHot))
         return lst
 
 

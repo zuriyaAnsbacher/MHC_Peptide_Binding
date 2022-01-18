@@ -19,26 +19,30 @@ from Sampler import SamplerByLength
 
 
 class HLA_Pep_Model(nn.Module):
-    def __init__(self, encoding_dim_pep, encoding_dim_hla, pep_AE, hla_AE):
+    def __init__(self, encoding_dim_pep, encoding_dim_hla, pep_AE, hla_AE, hla1hot_size, use_hla1hot):
         super().__init__()
 
         self.encoding_dim_pep = encoding_dim_pep
         self.encoding_dim_hla = encoding_dim_hla
         self.hla_AE = hla_AE
         self.pep_AE = pep_AE
+        self.hla1hot_size = hla1hot_size if use_hla1hot else 0
 
         self.fc1 = nn.Sequential(
-            nn.Linear(self.encoding_dim_pep + self.encoding_dim_hla, 32),
+            nn.Linear(self.encoding_dim_pep + self.encoding_dim_hla + self.hla1hot_size, 32),
             nn.ReLU(),
             nn.Dropout(0.1),
         )
         self.fc2A = nn.Linear(32, 1)
         self.fc2B = nn.Linear(32, 1)
 
-    def forward(self, pep, hla):
+    def forward(self, pep, hla, hla_oneHot, use_hla1hot):
         pep_encoded, _ = self.pep_AE(pep)
         hla_encoded, _ = self.hla_AE(hla)
-        x = torch.cat((pep_encoded, hla_encoded), dim=1)
+        if use_hla1hot:
+            x = torch.cat((pep_encoded, hla_encoded, hla_oneHot), dim=1)
+        else:
+            x = torch.cat((pep_encoded, hla_encoded), dim=1)
         x = self.fc1(x)
         y1 = self.fc2A(x)
         y2 = self.fc2B(x)
@@ -72,7 +76,7 @@ def loss_func_MSE(pred, true):
     return MSE
 
 
-def train_epoch(model, train_loader, loss_BCE, loss_MSE, optimizer, var, alpha, device):
+def train_epoch(model, train_loader, loss_BCE, loss_MSE, optimizer, use_hla1hot, var, alpha, device):
     model.train()
     total_loss = 0
     preds1, preds2 = [], []
@@ -81,13 +85,13 @@ def train_epoch(model, train_loader, loss_BCE, loss_MSE, optimizer, var, alpha, 
     sigmoid = nn.Sigmoid()
 
     for batch in train_loader:
-        pep, hla, y1, y2, flag = batch  # y1 binary, y2 continuous
-        pep, hla, y1, y2, flag = \
-            pep.to(device), hla.to(device), y1.to(device), y2.to(device), flag.to(device)
+        pep, hla, y1, y2, flag, hla_oneHot = batch  # y1 binary, y2 continuous
+        pep, hla, y1, y2, flag, hla_oneHot = \
+            pep.to(device), hla.to(device), y1.to(device), y2.to(device), flag.to(device), hla_oneHot.to(device)
 
         optimizer.zero_grad()
 
-        pred1, pred2 = model(pep, hla)
+        pred1, pred2 = model(pep, hla, hla_oneHot, use_hla1hot)
         pred1, pred2 = pred1.view(-1), pred2.view(-1)  # squeeze(1)?
 
         new_pred1 = torch.multiply(pred1, 1 - flag)
@@ -123,7 +127,7 @@ def train_epoch(model, train_loader, loss_BCE, loss_MSE, optimizer, var, alpha, 
     return total_loss / len(train_loader), auc, r2
 
 
-def run_validation(model, val_loader, loss_BCE, loss_MSE, var, alpha, device):
+def run_validation(model, val_loader, loss_BCE, loss_MSE, use_hla1hot, var, alpha, device):
     model.eval()
     total_loss = 0
     preds1, preds2 = [], []
@@ -133,11 +137,11 @@ def run_validation(model, val_loader, loss_BCE, loss_MSE, var, alpha, device):
 
     with torch.no_grad():
         for batch in val_loader:
-            pep, hla, y1, y2, flag = batch
-            pep, hla, y1, y2, flag = \
-                pep.to(device), hla.to(device), y1.to(device), y2.to(device), flag.to(device)
+            pep, hla, y1, y2, flag, hla_oneHot = batch
+            pep, hla, y1, y2, flag, hla_oneHot = \
+                pep.to(device), hla.to(device), y1.to(device), y2.to(device), flag.to(device), hla_oneHot.to(device)
 
-            pred1, pred2 = model(pep, hla)
+            pred1, pred2 = model(pep, hla, hla_oneHot, use_hla1hot)
             pred1, pred2 = pred1.view(-1), pred2.view(-1)  # squeeze(1)?
 
             new_pred1 = torch.multiply(pred1, 1 - flag)
@@ -170,7 +174,7 @@ def run_validation(model, val_loader, loss_BCE, loss_MSE, var, alpha, device):
     return total_loss / len(val_loader), auc, r2
 
 
-def run_model(train_loader, val_loader, Pep_model_dict, HLA_model_dict,
+def run_model(train_loader, val_loader, Pep_model_dict, HLA_model_dict, use_hla1hot, hla1hot_size,
               epochs, var, alpha, device, early_stopping):
     pep_model, hla_model = get_existing_model(Pep_model_dict, HLA_model_dict)
 
@@ -183,7 +187,7 @@ def run_model(train_loader, val_loader, Pep_model_dict, HLA_model_dict,
     # model = HLA_Pep_Model(Pep_model_dict['encoding_dim'], HLA_model_dict['encoding_dim'],
     #                       pep_model, hla_model)
     model = HLA_Pep_Model(Pep_model_dict['enc_dim'], HLA_model_dict['encoding_dim'],  # todo: change to 'encoding_dim'
-                          pep_model, hla_model)
+                          pep_model, hla_model, hla1hot_size, use_hla1hot)
     model.to(device)
     loss_BCE = loss_func_BCE
     loss_MSE = loss_func_MSE
@@ -200,11 +204,13 @@ def run_model(train_loader, val_loader, Pep_model_dict, HLA_model_dict,
 
     for epoch in range(1, epochs + 1):
         print(f'Epoch: {epoch} / {epochs}')
-        train_loss, train_auc, train_r2 = train_epoch(model, train_loader, loss_BCE, loss_MSE, optimizer, var, alpha, device)
+        train_loss, train_auc, train_r2 = \
+            train_epoch(model, train_loader, loss_BCE, loss_MSE, optimizer, use_hla1hot, var, alpha, device)
         train_loss_list.append(train_loss)
         train_auc_list.append(train_auc)
         train_r2_list.append(train_r2)
-        val_loss, val_auc, val_r2 = run_validation(model, val_loader, loss_BCE, loss_MSE, var, alpha, device)
+        val_loss, val_auc, val_r2 = \
+            run_validation(model, val_loader, loss_BCE, loss_MSE, use_hla1hot, var, alpha, device)
         val_loss_list.append(val_loss)
         val_auc_list.append(val_auc)
         val_r2_list.append(val_r2)
@@ -222,12 +228,18 @@ def run_model(train_loader, val_loader, Pep_model_dict, HLA_model_dict,
     return best_model, train_loss_list, val_loss_list, train_auc_list, val_auc_list, train_r2_list, val_r2_list, epoch
 
 
+def get_hla_oneHot_map(hla_freq_path, n_rows):
+    df = pd.read_csv(hla_freq_path, nrows=n_rows)
+    HLAs = list(df['HLA'])
+    return {HLAs[i]: i for i in range(len(HLAs))}
+
+
 def plot_loss(train, val, num_epochs, save_dir):
     epochs = [e for e in range(1, num_epochs + 1)]
     label1 = 'Train'
     label2 = 'Validation'
     plt.figure(2)
-    plt.plot(epochs, train, 'bo', color='deepskyblue', label=label1)
+    plt.plot(epochs, train, 'b', color='deepskyblue', label=label1)
     plt.plot(epochs, val, 'b', color='orange', label=label2)
     plt.xlabel('Epoch')
     plt.ylabel('Average loss')
@@ -264,7 +276,7 @@ def plot_r2(train_r2, val_r2, num_epochs, save_dir):
     plt.close()
 
 
-def evaluate(model, test_loader, device):
+def evaluate(model, test_loader, use_hla1hot, device):
     model.eval()
     preds1, preds2 = [], []
     trues1, trues2 = [], []
@@ -273,11 +285,11 @@ def evaluate(model, test_loader, device):
 
     with torch.no_grad():
         for batch in test_loader:
-            pep, hla, y1, y2, flag = batch
-            pep, hla, y1, y2, flag = \
-                pep.to(device), hla.to(device), y1.to(device), y2.to(device), flag.to(device)
+            pep, hla, y1, y2, flag, hla_oneHot = batch
+            pep, hla, y1, y2, flag, hla_oneHot = \
+                pep.to(device), hla.to(device), y1.to(device), y2.to(device), flag.to(device), hla_oneHot.to(device)
 
-            pred1, pred2 = model(pep, hla)
+            pred1, pred2 = model(pep, hla, hla_oneHot, use_hla1hot)
             pred1, pred2 = pred1.view(-1), pred2.view(-1)
 
             preds1 += sigmoid(pred1).detach().cpu().numpy().tolist()
@@ -306,6 +318,7 @@ def main():
     version = parameters["version"]
     HLA_Model_path = parameters["HLA_Model_path"]
     Pep_Model_path = parameters["Pep_Model_path"]
+    hla_freq_path = parameters["HLA_Freqs_path"]
 
     save_path = root + '_CNN_LSTM_FC_Results'
     save_dir = f'{save_path}/CNN_LSTM_FC_version{version}'
@@ -317,7 +330,8 @@ def main():
         os.mkdir(save_dir)
 
     Pep_Header = parameters["Pep_Header"]
-    HLA_Header = parameters["HLA_Header"]
+    HLA_Seq_Header = parameters["HLA_Seq_Header"]
+    HLA_Name_Header = parameters["HLA_Name_Header"]
     Binary_Header = parameters["Binary_Binding_Header"]
     Cont_Header = parameters["Continuous_Binding_Header"]
     Flag_Header = parameters["Flag_Header"]
@@ -326,6 +340,8 @@ def main():
     batch_size = parameters["BATCH_SIZE"]
     alpha = parameters["Alpha"]
     pep_optional_len = parameters["Pep_optional_len"]
+    use_hla1hot = parameters["Use_hla_oneHot"]
+    hla1hot_size = parameters["hla_oneHot_size"]
     saved_model_file = parameters["Saved_model_file"]
 
     # load existing models
@@ -339,7 +355,9 @@ def main():
     print('loading data')
     data = pd.read_csv(datafile)
 
-    x = np.concatenate((data[Pep_Header].values.reshape(-1, 1), data[HLA_Header].values.reshape(-1, 1)), axis=1)
+    x = np.concatenate((data[Pep_Header].values.reshape(-1, 1),
+                        data[HLA_Name_Header].values.reshape(-1, 1),
+                        data[HLA_Seq_Header].values.reshape(-1, 1)), axis=1)
     y = np.concatenate((data[Binary_Header].values.reshape(-1, 1),
                         data[Cont_Header].values.reshape(-1, 1),
                         data[Flag_Header].values.reshape(-1, 1)), axis=1)
@@ -349,17 +367,18 @@ def main():
     x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.2, stratify=y[:, 2])
     x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=0.15, stratify=y_train[:, 2])
 
-    headers = [Pep_Header, HLA_Header, Binary_Header, Cont_Header, Flag_Header]
+    headers = [Pep_Header, HLA_Name_Header, HLA_Seq_Header, Binary_Header, Cont_Header, Flag_Header]
     train = pd.DataFrame(np.concatenate((x_train, y_train), axis=1), columns=headers)
     val = pd.DataFrame(np.concatenate((x_val, y_val), axis=1), columns=headers)
     test = pd.DataFrame(np.concatenate((x_test, y_test), axis=1), columns=headers)
 
-    var = np.log(
-        train[train[Flag_Header] == 1][Cont_Header].astype(float)).var()  # variance of log continuous train values
+    cont_values = train[train[Flag_Header] == 1][Cont_Header]
+    var = np.log(cont_values.astype(float), where=cont_values != 0).var()  # variance of log continuous train values
+    hla_oneHotMap = get_hla_oneHot_map(hla_freq_path,  n_rows=30)  # 30 most common
 
-    train_data = HLAPepDataset_2Labels(train, headers, HLA_model_dict["amino_pos_to_num"])
-    val_data = HLAPepDataset_2Labels(val, headers, HLA_model_dict["amino_pos_to_num"])
-    test_data = HLAPepDataset_2Labels(test, headers, HLA_model_dict["amino_pos_to_num"])
+    train_data = HLAPepDataset_2Labels(train, headers, hla_oneHotMap, HLA_model_dict["amino_pos_to_num"])
+    val_data = HLAPepDataset_2Labels(val, headers, hla_oneHotMap, HLA_model_dict["amino_pos_to_num"])
+    test_data = HLAPepDataset_2Labels(test, headers, hla_oneHotMap, HLA_model_dict["amino_pos_to_num"])
 
     bucket_boundaries = [20 * i for i in pep_optional_len]
     train_sampler = SamplerByLength(train_data, bucket_boundaries, batch_size)
@@ -370,18 +389,19 @@ def main():
     train_loader = DataLoader(train_data, batch_size=1, batch_sampler=train_sampler, collate_fn=train_data.collate)
     val_loader = DataLoader(val_data, batch_size=1, batch_sampler=val_sampler, collate_fn=val_data.collate)
     test_loader = DataLoader(test_data, batch_size=1, batch_sampler=test_sampler, collate_fn=test_data.collate)
+
     print('finished loading')
 
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     model, train_loss_list, val_loss_list, train_auc_list, val_auc_list, train_r2_list, val_r2_list, num_epochs = \
-        run_model(train_loader, val_loader, Pep_model_dict, HLA_model_dict,
-                  epochs=epochs, var=var, alpha=alpha, device=device, early_stopping=True)
+        run_model(train_loader, val_loader, Pep_model_dict, HLA_model_dict, use_hla1hot=use_hla1hot,
+                  hla1hot_size=hla1hot_size, epochs=epochs, var=var, alpha=alpha, device=device, early_stopping=True)
 
     plot_loss(train_loss_list, val_loss_list, num_epochs, save_dir)
     plot_auc(train_auc_list, val_auc_list, num_epochs, save_dir)
     plot_r2(train_r2_list, val_r2_list, num_epochs, save_dir)
 
-    evaluate(model, test_loader, device)
+    evaluate(model, test_loader, use_hla1hot, device)
 
     torch.save({
         'batch_size': batch_size,
