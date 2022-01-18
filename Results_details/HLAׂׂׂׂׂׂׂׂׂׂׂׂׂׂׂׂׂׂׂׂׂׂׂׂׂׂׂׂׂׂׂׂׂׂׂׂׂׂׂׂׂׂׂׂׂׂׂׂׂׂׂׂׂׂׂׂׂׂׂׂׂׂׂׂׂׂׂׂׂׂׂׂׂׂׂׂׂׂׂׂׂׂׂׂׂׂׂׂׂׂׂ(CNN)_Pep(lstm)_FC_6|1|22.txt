@@ -19,3 +19,5 @@ Results:
 
 Path to results:
     'Autoencoder/HLA_Pep_CNN_LSTM_FC_Results/CNN_LSTM_FC_version2'
+
+# Note: see note 2 in 'HLA(CNN)_Pep(lstm)_FC_21|12|21.txt'
