@@ -177,7 +177,7 @@ def plot_loss(train, val, num_epochs, save_dir):
     label1 = 'Train'
     label2 = 'Validation'
     plt.figure(2)
-    plt.plot(epochs, train, 'bo', color='deepskyblue', label=label1)
+    plt.plot(epochs, train, 'b', color='deepskyblue', label=label1)
     plt.plot(epochs, val, 'b', color='orange', label=label2)
     plt.xlabel('Epoch')
     plt.ylabel('Average loss')
@@ -242,7 +242,7 @@ def main():
         os.mkdir(save_dir)
 
     Pep_Header = parameters["Pep_Header"]
-    HLA_Header = parameters["HLA_Header"]
+    HLA_Header = parameters["HLA_Seq_Header"]
     Binding_Header = parameters["Binding_Header"]
 
     epochs = parameters["EPOCHS"]
