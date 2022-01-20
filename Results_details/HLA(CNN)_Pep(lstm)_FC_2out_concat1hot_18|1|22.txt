@@ -1,0 +1,44 @@
+Script:
+    HLA_Pep_model_2outputs.py
+
+Hyper-parameters:
+    batch size: 50
+    epochs: 250
+    optimizer: Adam. parameters: only fc layers after the AEs
+    loss functions:
+        F.binary_cross_entropy_with_logits
+        F.mse_loss
+    alpha (coefficient to linear combination of loss functions): 0.5
+    counter of early stopping: 30
+    train size: 68% (0.8 * 0.85)
+    val size: 12% (0.8 * 0.15)
+    test size: 20%
+
+Model details:
+    Same model like in 'HLA(CNN)_Pep(lstm)_FC_2outputs_13|1|22.txt', with one difference:
+    to the concatenated encoded pep and HLA, I add one-hot vector that was built by taken the most common 30 HLA-A,
+    and for each of them create one-hot. (dim=30). other HLA-A are represented by 0-vector.
+    (The idea is to make a distinction between common HLA, that the main information about them could be learned from
+    the peptides that bound them, to the less common HLA, that their information is learned from other HLA).
+
+Data file:
+    mhc_pep00A_25percNeg_Pep7_11_2labels.csv
+    (original file: mhc_ligand_full_00.csv)
+    Processing done by:
+         - filtered by: Linear peptide, Homo sapiens (in Host column)
+         - hla: remove hla with mutant (like 'A*02:01 K66A mutant')
+         - hla: get only HLA-A
+         - peptides: remove artificial addition ('OVYLVMEL + OX(6M)' -> 'OVYLVMEL')
+         - peptides length: 7-11
+         - split each sample that has 2 classifications: binary and continuous, to 2 samples (one binary, one continuous)
+         - create negative samples randomly. ratio of ~ 75% positive, 25% negative
+         - save in datafile also HLA-name (unlike the previous processing), because it needed to the concat one-hot
+    Finally, contains 337677 pairs of pep-hla. 238345 with binary labels, and 99332 with continuous.
+
+Results:
+    Num epochs: 250 / 250
+    auc test:  0.8963  |  r2 test:  0.2674
+
+Path to results:
+    'Autoencoder/HLA_Pep_CNN_LSTM_FC_Results/CNN_LSTM_FC_version4'
+
