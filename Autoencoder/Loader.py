@@ -62,7 +62,6 @@ class HLAPepDataset(Dataset):
         return lst
 
 
-# with hla_oneHot for common HLAs
 class HLAPepDataset_2Labels(Dataset):
     def __init__(self, data, headers, hla_oneHot, amino_pos_to_num):
         self.data = data  # DataFrame
@@ -96,7 +95,7 @@ class HLAPepDataset_2Labels(Dataset):
 
         hla = self.convert_to_numeric(hla_seq)
         pep = self.convert_to_one_hot(pep, seq_type='pep')
-        continuous = np.log(continuous) if (flag == 1 and continuous != 0) else continuous
+        continuous = np.log(continuous + 1/np.e) if (flag == 1) else continuous # epsilon = 1/e (for log(0+epsilon)->-1)
         hla_oneHot = self.convert_to_one_hot(hla_name, seq_type='hla')
 
         sample = (pep, hla, binary, continuous, flag, hla_oneHot)
@@ -137,6 +136,15 @@ class HLAPepDataset_2Labels(Dataset):
                 vec = self.common_hla_oneHot['else']  # vector 0
         return vec
 
+    @staticmethod
+    def oneHot_to_scalar(oneHot_lst):
+        def to_scalar(x):
+            if x.count(1) == 0:  # not common allele, so one_hot is 0-vector. so get fixed val for embedding
+                return len(x)
+            else:  # common allele. val for embedding is its index in the one-hot
+                return x.index(1)
+        return [to_scalar(item) for item in oneHot_lst]
+
     def collate(self, batch):
         pep, hla, binary, continuous, flag, hla_oneHot = zip(*batch)
         lst = list()
@@ -146,6 +154,7 @@ class HLAPepDataset_2Labels(Dataset):
         lst.append(torch.Tensor(continuous))
         lst.append(torch.Tensor(flag))
         lst.append(torch.Tensor(hla_oneHot))
+        lst.append(torch.Tensor(self.oneHot_to_scalar(hla_oneHot)))
         return lst
 
 
@@ -177,9 +186,3 @@ def check():
 
 
 # check()
-
-
-
-
-
-

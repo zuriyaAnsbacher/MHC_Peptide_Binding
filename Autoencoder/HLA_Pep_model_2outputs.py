@@ -19,30 +19,45 @@ from Sampler import SamplerByLength
 
 
 class HLA_Pep_Model(nn.Module):
-    def __init__(self, encoding_dim_pep, encoding_dim_hla, pep_AE, hla_AE, hla1hot_size, use_hla1hot):
+    def __init__(self, encoding_dim_pep, encoding_dim_hla, pep_AE, hla_AE,
+                 concat_type, concat_oneHot_dim, concat_emb_dim):
         super().__init__()
 
         self.encoding_dim_pep = encoding_dim_pep
         self.encoding_dim_hla = encoding_dim_hla
         self.hla_AE = hla_AE
         self.pep_AE = pep_AE
-        self.hla1hot_size = hla1hot_size if use_hla1hot else 0
+        self.concat_type = concat_type
+        self.concat_oneHot_dim = concat_oneHot_dim if self.concat_type == 'oneHot' else 0
+        self.concat_emb_dim = concat_emb_dim if self.concat_type == 'emb' else 0
+        if self.concat_type == 'emb':
+            self.concat_embedding = nn.Embedding(concat_oneHot_dim + 1, concat_emb_dim)
+
+        self.encoded_layer_size = self.encoding_dim_pep + self.encoding_dim_hla + \
+                                  self.concat_oneHot_dim + self.concat_emb_dim  # at least one from the 2 lasts is 0
 
         self.fc1 = nn.Sequential(
-            nn.Linear(self.encoding_dim_pep + self.encoding_dim_hla + self.hla1hot_size, 32),
+            nn.Linear(self.encoded_layer_size, 32),
             nn.ReLU(),
             nn.Dropout(0.1),
         )
         self.fc2A = nn.Linear(32, 1)
         self.fc2B = nn.Linear(32, 1)
 
-    def forward(self, pep, hla, hla_oneHot, use_hla1hot):
+    def forward(self, pep, hla, hla_oneHot, emb):
         pep_encoded, _ = self.pep_AE(pep)
         hla_encoded, _ = self.hla_AE(hla)
-        if use_hla1hot:
+
+        if self.concat_type == 'emb':
+            emb = self.concat_embedding(emb.long())
+
+        if self.concat_type == 'oneHot':
             x = torch.cat((pep_encoded, hla_encoded, hla_oneHot), dim=1)
-        else:
+        elif self.concat_type == 'emb':
+            x = torch.cat((pep_encoded, hla_encoded, emb), dim=1)
+        elif self.concat_type == "None":
             x = torch.cat((pep_encoded, hla_encoded), dim=1)
+
         x = self.fc1(x)
         y1 = self.fc2A(x)
         y2 = self.fc2B(x)
@@ -76,7 +91,7 @@ def loss_func_MSE(pred, true):
     return MSE
 
 
-def train_epoch(model, train_loader, loss_BCE, loss_MSE, optimizer, use_hla1hot, var, alpha, device):
+def train_epoch(model, train_loader, loss_BCE, loss_MSE, optimizer, var, alpha, device):
     model.train()
     total_loss = 0
     preds1, preds2 = [], []
@@ -85,13 +100,13 @@ def train_epoch(model, train_loader, loss_BCE, loss_MSE, optimizer, use_hla1hot,
     sigmoid = nn.Sigmoid()
 
     for batch in train_loader:
-        pep, hla, y1, y2, flag, hla_oneHot = batch  # y1 binary, y2 continuous
-        pep, hla, y1, y2, flag, hla_oneHot = \
-            pep.to(device), hla.to(device), y1.to(device), y2.to(device), flag.to(device), hla_oneHot.to(device)
+        pep, hla, y1, y2, flag, hla_oneHot, emb = batch  # y1 binary, y2 continuous
+        pep, hla, y1, y2, flag, hla_oneHot, emb = pep.to(device), hla.to(device), y1.to(device), y2.to(device), \
+                                                  flag.to(device), hla_oneHot.to(device), emb.to(device)
 
         optimizer.zero_grad()
 
-        pred1, pred2 = model(pep, hla, hla_oneHot, use_hla1hot)
+        pred1, pred2 = model(pep, hla, hla_oneHot, emb)
         pred1, pred2 = pred1.view(-1), pred2.view(-1)  # squeeze(1)?
 
         new_pred1 = torch.multiply(pred1, 1 - flag)
@@ -127,7 +142,7 @@ def train_epoch(model, train_loader, loss_BCE, loss_MSE, optimizer, use_hla1hot,
     return total_loss / len(train_loader), auc, r2
 
 
-def run_validation(model, val_loader, loss_BCE, loss_MSE, use_hla1hot, var, alpha, device):
+def run_validation(model, val_loader, loss_BCE, loss_MSE, var, alpha, device):
     model.eval()
     total_loss = 0
     preds1, preds2 = [], []
@@ -137,11 +152,11 @@ def run_validation(model, val_loader, loss_BCE, loss_MSE, use_hla1hot, var, alph
 
     with torch.no_grad():
         for batch in val_loader:
-            pep, hla, y1, y2, flag, hla_oneHot = batch
-            pep, hla, y1, y2, flag, hla_oneHot = \
-                pep.to(device), hla.to(device), y1.to(device), y2.to(device), flag.to(device), hla_oneHot.to(device)
+            pep, hla, y1, y2, flag, hla_oneHot, emb = batch
+            pep, hla, y1, y2, flag, hla_oneHot, emb = pep.to(device), hla.to(device), y1.to(device), y2.to(device), \
+                                                      flag.to(device), hla_oneHot.to(device), emb.to(device)
 
-            pred1, pred2 = model(pep, hla, hla_oneHot, use_hla1hot)
+            pred1, pred2 = model(pep, hla, hla_oneHot, emb)
             pred1, pred2 = pred1.view(-1), pred2.view(-1)  # squeeze(1)?
 
             new_pred1 = torch.multiply(pred1, 1 - flag)
@@ -174,7 +189,7 @@ def run_validation(model, val_loader, loss_BCE, loss_MSE, use_hla1hot, var, alph
     return total_loss / len(val_loader), auc, r2
 
 
-def run_model(train_loader, val_loader, Pep_model_dict, HLA_model_dict, use_hla1hot, hla1hot_size,
+def run_model(train_loader, val_loader, Pep_model_dict, HLA_model_dict, concat_type, concat_oneHot_dim, concat_emb_dim,
               epochs, var, alpha, device, early_stopping):
     pep_model, hla_model = get_existing_model(Pep_model_dict, HLA_model_dict)
 
@@ -187,7 +202,7 @@ def run_model(train_loader, val_loader, Pep_model_dict, HLA_model_dict, use_hla1
     # model = HLA_Pep_Model(Pep_model_dict['encoding_dim'], HLA_model_dict['encoding_dim'],
     #                       pep_model, hla_model)
     model = HLA_Pep_Model(Pep_model_dict['enc_dim'], HLA_model_dict['encoding_dim'],  # todo: change to 'encoding_dim'
-                          pep_model, hla_model, hla1hot_size, use_hla1hot)
+                          pep_model, hla_model, concat_type, concat_oneHot_dim, concat_emb_dim)
     model.to(device)
     loss_BCE = loss_func_BCE
     loss_MSE = loss_func_MSE
@@ -205,12 +220,12 @@ def run_model(train_loader, val_loader, Pep_model_dict, HLA_model_dict, use_hla1
     for epoch in range(1, epochs + 1):
         print(f'Epoch: {epoch} / {epochs}')
         train_loss, train_auc, train_r2 = \
-            train_epoch(model, train_loader, loss_BCE, loss_MSE, optimizer, use_hla1hot, var, alpha, device)
+            train_epoch(model, train_loader, loss_BCE, loss_MSE, optimizer, var, alpha, device)
         train_loss_list.append(train_loss)
         train_auc_list.append(train_auc)
         train_r2_list.append(train_r2)
         val_loss, val_auc, val_r2 = \
-            run_validation(model, val_loader, loss_BCE, loss_MSE, use_hla1hot, var, alpha, device)
+            run_validation(model, val_loader, loss_BCE, loss_MSE, var, alpha, device)
         val_loss_list.append(val_loss)
         val_auc_list.append(val_auc)
         val_r2_list.append(val_r2)
@@ -276,7 +291,7 @@ def plot_r2(train_r2, val_r2, num_epochs, save_dir):
     plt.close()
 
 
-def evaluate(model, test_loader, use_hla1hot, device):
+def evaluate(model, test_loader, device):
     model.eval()
     preds1, preds2 = [], []
     trues1, trues2 = [], []
@@ -285,11 +300,11 @@ def evaluate(model, test_loader, use_hla1hot, device):
 
     with torch.no_grad():
         for batch in test_loader:
-            pep, hla, y1, y2, flag, hla_oneHot = batch
-            pep, hla, y1, y2, flag, hla_oneHot = \
-                pep.to(device), hla.to(device), y1.to(device), y2.to(device), flag.to(device), hla_oneHot.to(device)
+            pep, hla, y1, y2, flag, hla_oneHot, emb = batch
+            pep, hla, y1, y2, flag, hla_oneHot, emb = pep.to(device), hla.to(device), y1.to(device), y2.to(device), \
+                                                      flag.to(device), hla_oneHot.to(device), emb.to(device)
 
-            pred1, pred2 = model(pep, hla, hla_oneHot, use_hla1hot)
+            pred1, pred2 = model(pep, hla, hla_oneHot, emb)
             pred1, pred2 = pred1.view(-1), pred2.view(-1)
 
             preds1 += sigmoid(pred1).detach().cpu().numpy().tolist()
@@ -340,9 +355,15 @@ def main():
     batch_size = parameters["BATCH_SIZE"]
     alpha = parameters["Alpha"]
     pep_optional_len = parameters["Pep_optional_len"]
-    use_hla1hot = parameters["Use_hla_oneHot"]
-    hla1hot_size = parameters["hla_oneHot_size"]
+    concat_type = parameters["Concat_type"]
+    concat_oneHot_dim = parameters["Concat_oneHot_dim"]
+    concat_emb_dim = parameters["Concat_emb_dim"]
+
     saved_model_file = parameters["Saved_model_file"]
+
+    if concat_type not in ['oneHot', 'emb', 'None']:
+        print('Error: concat_type has to be "oneHot"/"emb"/"None" only')
+        return
 
     # load existing models
     if torch.cuda.is_available():
@@ -374,7 +395,7 @@ def main():
 
     cont_values = train[train[Flag_Header] == 1][Cont_Header]
     var = np.log(cont_values.astype(float), where=cont_values != 0).var()  # variance of log continuous train values
-    hla_oneHotMap = get_hla_oneHot_map(hla_freq_path,  n_rows=30)  # 30 most common
+    hla_oneHotMap = get_hla_oneHot_map(hla_freq_path,  n_rows=concat_oneHot_dim)  # 30 most common
 
     train_data = HLAPepDataset_2Labels(train, headers, hla_oneHotMap, HLA_model_dict["amino_pos_to_num"])
     val_data = HLAPepDataset_2Labels(val, headers, hla_oneHotMap, HLA_model_dict["amino_pos_to_num"])
@@ -394,14 +415,15 @@ def main():
 
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     model, train_loss_list, val_loss_list, train_auc_list, val_auc_list, train_r2_list, val_r2_list, num_epochs = \
-        run_model(train_loader, val_loader, Pep_model_dict, HLA_model_dict, use_hla1hot=use_hla1hot,
-                  hla1hot_size=hla1hot_size, epochs=epochs, var=var, alpha=alpha, device=device, early_stopping=True)
+        run_model(train_loader, val_loader, Pep_model_dict, HLA_model_dict, concat_type=concat_type,
+                  concat_oneHot_dim=concat_oneHot_dim, concat_emb_dim=concat_emb_dim, epochs=epochs,
+                  var=var, alpha=alpha, device=device, early_stopping=True)
 
     plot_loss(train_loss_list, val_loss_list, num_epochs, save_dir)
     plot_auc(train_auc_list, val_auc_list, num_epochs, save_dir)
     plot_r2(train_r2_list, val_r2_list, num_epochs, save_dir)
 
-    evaluate(model, test_loader, use_hla1hot, device)
+    evaluate(model, test_loader, device)
 
     torch.save({
         'batch_size': batch_size,
