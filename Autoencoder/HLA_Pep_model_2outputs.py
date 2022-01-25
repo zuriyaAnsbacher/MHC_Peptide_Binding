@@ -16,6 +16,7 @@ from AE_with_CNN import CNN_AE
 from AE_with_lstm import LSTM_AE
 from Loader import HLAPepDataset_2Labels
 from Sampler import SamplerByLength
+from Auxiliary_functions import evaluate_splitScoreByFreqHLA
 
 
 class HLA_Pep_Model(nn.Module):
@@ -358,6 +359,7 @@ def main():
     concat_type = parameters["Concat_type"]
     concat_oneHot_dim = parameters["Concat_oneHot_dim"]
     concat_emb_dim = parameters["Concat_emb_dim"]
+    split_score_by_freq = parameters['Split_score_by_freq']
 
     saved_model_file = parameters["Saved_model_file"]
 
@@ -385,8 +387,8 @@ def main():
 
     # hla or pep could be in some groups (train-val-test) but not as a pair
     # stratify by Flag (binary/continuous)
-    x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.2, stratify=y[:, 2])
-    x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=0.15, stratify=y_train[:, 2])
+    x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.2, stratify=y[:, 2], random_state=0)  # I added seed (for comparison)
+    x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=0.15, stratify=y_train[:, 2], random_state=0) # I added seed (for comparison)
 
     headers = [Pep_Header, HLA_Name_Header, HLA_Seq_Header, Binary_Header, Cont_Header, Flag_Header]
     train = pd.DataFrame(np.concatenate((x_train, y_train), axis=1), columns=headers)
@@ -413,7 +415,7 @@ def main():
 
     print('finished loading')
 
-    device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+    device = 'cuda:1' if torch.cuda.is_available() else 'cpu'
     model, train_loss_list, val_loss_list, train_auc_list, val_auc_list, train_r2_list, val_r2_list, num_epochs = \
         run_model(train_loader, val_loader, Pep_model_dict, HLA_model_dict, concat_type=concat_type,
                   concat_oneHot_dim=concat_oneHot_dim, concat_emb_dim=concat_emb_dim, epochs=epochs,
@@ -423,7 +425,10 @@ def main():
     plot_auc(train_auc_list, val_auc_list, num_epochs, save_dir)
     plot_r2(train_r2_list, val_r2_list, num_epochs, save_dir)
 
-    evaluate(model, test_loader, device)
+    if split_score_by_freq:
+        evaluate_splitScoreByFreqHLA(model, test_loader, batch_size, device, test, test_sampler)
+    else:
+        evaluate(model, test_loader, device)
 
     torch.save({
         'batch_size': batch_size,
@@ -433,3 +438,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+
