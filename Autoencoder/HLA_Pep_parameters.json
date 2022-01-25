@@ -1,7 +1,7 @@
 {
   "root" : "HLA_Pep",
   "datafile": "../Data/IEDB_processed/MHC_and_Pep/mhc_pep00A_25percNeg_Pep7_11_2labels.csv",
-  "version": "7",
+  "version": "7_concatNone",
 
   "Pep_Header": "Pep",
   "HLA_Name_Header": "HLA name",
@@ -21,7 +21,8 @@
   "BATCH_SIZE": 50,
   "Alpha": 0.5,
   "Pep_optional_len": [7, 8, 9, 10, 11],
-  "Concat_type": "emb",
+  "Concat_type": "None",
   "Concat_oneHot_dim": 30,
-  "Concat_emb_dim": 20
+  "Concat_emb_dim": 20,
+  "Split_score_by_freq": true
 }
