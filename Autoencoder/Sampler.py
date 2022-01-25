@@ -24,6 +24,8 @@ class SamplerByLength(Sampler):
         self.bucket_boundaries = bucket_boundaries
         self.batch_size = batch_size
 
+        self.iter_order = None
+
     def __iter__(self):
         data_buckets = dict()
         for sample_idx, sample_len in self.ind_n_len:
@@ -44,6 +46,8 @@ class SamplerByLength(Sampler):
             if samples_same_len.shape[0] >= self.batch_size:
                 iter_list += (np.array_split(samples_same_len, (samples_same_len.shape[0] // self.batch_size)))
         shuffle(iter_list)
+
+        self.iter_order = iter_list  # for function 'evaluate_splitScoreByFreqHLA'
 
         for i in iter_list:
             yield i.tolist()
