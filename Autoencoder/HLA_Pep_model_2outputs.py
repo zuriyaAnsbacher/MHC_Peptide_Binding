@@ -426,7 +426,7 @@ def main():
     plot_r2(train_r2_list, val_r2_list, num_epochs, save_dir)
 
     if split_score_by_freq:
-        evaluate_splitScoreByFreqHLA(model, test_loader, batch_size, device, test, test_sampler)
+        evaluate_splitScoreByFreqHLA(model, test_loader, test, test_sampler, batch_size, device)
     else:
         evaluate(model, test_loader, device)
 

@@ -4,11 +4,11 @@ from scipy.special import expit
 from sklearn.metrics import roc_auc_score, r2_score
 
 
-def evaluate_splitScoreByFreqHLA(model, test_loader, batch_size, device, test_data, test_sampler):
+def evaluate_splitScoreByFreqHLA(model, test_loader, test_df, test_sampler, batch_size, device):
 
     def checkFreq(ind_sample, ind_batch):
         idx = test_sampler.iter_order[ind_batch][ind_sample]
-        hla_name = test_data['HLA name'][idx]
+        hla_name = test_df['HLA name'][idx]
         freq = name2freq[hla_name]
         if freq >= 2944:
             return 'high'
