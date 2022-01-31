@@ -1,6 +1,7 @@
 import os
 import json
 import csv
+import nni
 import copy
 import pandas as pd
 import random
@@ -15,29 +16,36 @@ import matplotlib.pyplot as plt
 
 
 class Encoder(nn.Module):
-    def __init__(self, max_len, embedding_dim, encoding_dim, batch_size):
+    def __init__(self, max_len, encoding_dim, batch_size, model_params):
         super().__init__()
         self.max_len = max_len
-        self.embedding_dim = embedding_dim
         self.encoding_dim = encoding_dim
         self.vocab_size = max_len * 20  # + 2
         self.batch_size = batch_size
+        self.embedding_dim = model_params["embedding_dim"]
+        self.filter1 = model_params["filter1"]
+        self.filter2 = model_params["filter2"]
+        self.kernel1 = model_params["kernel1"]
+        self.kernel2 = model_params["kernel2"]
+        self.dropout_enc = model_params["dropout_enc"]
 
-        self.embedding = nn.Embedding(self.vocab_size, embedding_dim, padding_idx=-1)
+        self.size_after_conv = self.calculate_size_after_conv()
+
+        self.embedding = nn.Embedding(self.vocab_size, self.embedding_dim, padding_idx=-1)
         self.conv1 = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=2, padding=0),
+            nn.Conv2d(1, self.filter1, kernel_size=(self.kernel1, self.kernel2), padding=0),
             nn.ReLU(),
             nn.MaxPool2d(2)
         )
         self.conv2 = nn.Sequential(
-            nn.Conv2d(16, 32, kernel_size=2, padding=0),
+            nn.Conv2d(self.filter1, self.filter2, kernel_size=(self.kernel1, self.kernel2), padding=0),
             nn.ReLU(),
             nn.MaxPool2d(2)
         )
         self.fc1 = nn.Sequential(
-            nn.Linear(4320, 512),
+            nn.Linear(self.size_after_conv, 512),  # 4320
             nn.ReLU(),
-            nn.Dropout(0.2)
+            nn.Dropout(self.dropout_enc)
         )
         self.fc2 = nn.Linear(512, self.encoding_dim)
 
@@ -52,43 +60,63 @@ class Encoder(nn.Module):
         x = self.fc2(x)
         return x
 
+    def calculate_size_after_conv(self):
+        x_size = self.embedding_dim
+        y_size = self.max_len
+
+        # conv1 -> nn.Conv2d
+        x_size = (x_size - self.kernel1) + 1
+        y_size = (y_size -self.kernel2) + 1
+        # conv1 -> nn.MaxPool2d(2)
+        x_size = ((x_size - 2) // 2) + 1
+        y_size = ((y_size - 2) // 2) + 1
+
+        # conv2 -> nn.Conv2d
+        x_size = (x_size - self.kernel1) + 1
+        y_size = (y_size -self.kernel2) + 1
+        # conv2 -> nn.MaxPool2d(2)
+        x_size = ((x_size - 2) // 2) + 1
+        y_size = ((y_size - 2) // 2) + 1
+
+        return x_size * y_size * self.filter2
+
 
 class Decoder(nn.Module):
-    def __init__(self, max_len, encoding_dim):
+    def __init__(self, max_len, encoding_dim, model_params):
         super().__init__()
         self.max_len = max_len
         self.encoding_dim = encoding_dim
+        self.dropout_dec = model_params['dropout_dec']
+
         self.fc1 = nn.Sequential(
             nn.Linear(self.encoding_dim, 512),
             nn.ELU(),
-            nn.Dropout(0.1),
+            nn.Dropout(self.dropout_dec),
         )
         self.fc2 = nn.Sequential(
             nn.Linear(512, 1024),
             nn.ELU(),
-            nn.Dropout(0.1),
+            nn.Dropout(self.dropout_dec),
             nn.Linear(1024, self.max_len * 20)   # self.max_len * 21
         )
 
     def forward(self, x):
         x = self.fc1(x)
-        # print(x.size())
         x = self.fc2(x)
-        # print(x.size())
         return x
 
 
 class CNN_AE(nn.Module):
-    def __init__(self, max_len, embedding_dim, encoding_dim, batch_size):
+    def __init__(self, max_len, encoding_dim, batch_size, model_params):
         super().__init__()
 
         self.max_len = max_len
-        self.embedding_dim = embedding_dim
         self.encoding_dim = encoding_dim
         self.batch_size = batch_size
+        self.model_params = model_params
 
-        self.encoder = Encoder(self.max_len, self.embedding_dim, self.encoding_dim, self.batch_size)
-        self.decoder = Decoder(self.max_len, self.encoding_dim)
+        self.encoder = Encoder(self.max_len, self.encoding_dim, self.batch_size, self.model_params)
+        self.decoder = Decoder(self.max_len, self.encoding_dim, self.model_params)
 
     def forward(self, x):
         encoded = self.encoder(x)
@@ -96,17 +124,12 @@ class CNN_AE(nn.Module):
         return encoded, decoded
 
 
-def load_all_data(path, SEQ):
-    all_data = []
-    for directory, subdirectories, files in os.walk(path):
-        for file in tqdm(files):
-            df = pd.read_csv(os.path.join(directory, file))
-            data = list(df[SEQ])
-            random.shuffle(data)
-            all_data += data
-    all_data = list(set(all_data))
-    # random.shuffle(all_data)  # use it only if data contains more than 1 file
-    return all_data
+def load_all_data(datafile, SEQ):
+    df = pd.read_csv(datafile)
+    data = list(df[SEQ])
+    random.shuffle(data)
+    data = list(set(data))
+    return data
 
 
 def find_max_len(SEQs):
@@ -221,13 +244,15 @@ def run_validation(model, batches, batches_for_loss, loss_function, device):
     return total_loss_val / len(batches)
 
 
-def run_model(train_batches, validation_batches, train_batches_for_loss,
-              validation_batches_for_loss, max_len, encoding_dim, epochs,
-              batch_size, device, embedding_dim, early_stopping=False):
-    model = CNN_AE(max_len=max_len, embedding_dim=embedding_dim, encoding_dim=encoding_dim, batch_size=batch_size)
+def run_model(train_batches, validation_batches,
+              train_batches_for_loss, validation_batches_for_loss,
+              max_len, optim_params, model_params, encoding_dim,
+              epochs, batch_size, device, early_stopping=False, is_nni=False):
+
+    model = CNN_AE(max_len=max_len, encoding_dim=encoding_dim, batch_size=batch_size, model_params=model_params)
     model.to(device)
     loss_function = loss_func
-    optimizer = optim.Adam(model.parameters(), lr=1e-4, betas=(0.9, 0.999), eps=1e-8, weight_decay=1e-6)
+    optimizer = optim.Adam(model.parameters(), lr=optim_params['lr'],  weight_decay=optim_params['weight_decay'])
     train_loss_list = []
     val_loss_list = []
     min_loss = float('inf')
@@ -252,8 +277,13 @@ def run_model(train_batches, validation_batches, train_batches_for_loss,
         else:
             counter += 1
 
-    num_epochs = epoch
+        if is_nni:
+            nni.report_intermediate_result(val_loss)
 
+    if is_nni:
+        nni.report_final_result(min_loss)
+
+    num_epochs = epoch
     if best_model == 'None':
         best_model = copy.deepcopy(model)
 
@@ -351,11 +381,9 @@ def evaluate(model, batches, batches_for_loss, ix_to_amino, max_len,
                          '2 Mismatches': str(acc_2mis), '3 Mismatches': str(acc_3mis)})
 
 
-def main():
-    with open('AE_parameters.json') as f:
-        parameters = json.load(f)
-
+def main(parameters):
     root = parameters["root"]
+    datafile = parameters["datafile"]
     version = parameters["version"]
     save_path = root + '_CNN_Results'
     save_dir = f'{save_path}/CNN_version{version}'
@@ -367,12 +395,16 @@ def main():
         os.mkdir(save_dir)
 
     SEQ = parameters["SEQ"]
-    # HLA_or_Pep = parameters["HLA_or_Pep"]
-
     epochs = parameters["EPOCHS"]
     encoding_dim = parameters["ENCODING_DIM"]
-    embedding_dim = parameters["EMBEDDING_DIM"]
     batch_size = parameters["BATCH_SIZE"]
+    embedding_dim = parameters["EMBEDDING_DIM"]
+
+    optim_params = {'lr': 1e-4, 'weight_decay': 0}
+    model_params = {'embedding_dim': embedding_dim,
+                    'filter1': 16, 'filter2': 32,
+                    'kernel1': 2, 'kernel2': 2,
+                    'dropout_enc': 0.2, 'dropout_dec': 0.1}
 
     amino_acids = [letter for letter in 'ARNDCEQGHILKMFPSTWYV']
     # amino_to_ix = {amino: index for index, amino in enumerate(amino_acids + ['X'])}
@@ -381,7 +413,7 @@ def main():
     ix_to_amino = {index: amino for index, amino in enumerate(amino_acids)}
 
     print('loading data')
-    SEQs = load_all_data(root, SEQ)
+    SEQs = load_all_data(datafile, SEQ)
     print('finished loading')
 
     train, test, _, _ = train_test_split(SEQs, SEQs, test_size=0.2)
@@ -398,18 +430,16 @@ def main():
                                                       batch_size, max_len)
     validation_batches, validation_batches_for_loss = get_batches(validation, amino_to_ix,
                                                                   amino_pos_to_num, batch_size, max_len)
+    device = 'cuda:1' if torch.cuda.is_available() else 'cpu'
+    model, train_loss_list, val_loss_list, num_epochs = \
+        run_model(train_batches, validation_batches, train_batches_for_loss, validation_batches_for_loss,
+                  max_len, optim_params, model_params, encoding_dim=encoding_dim, epochs=epochs,
+                  batch_size=batch_size, device=device, early_stopping=True)
 
-    device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-    model, train_loss_list, val_loss_list, num_epochs = run_model(train_batches, validation_batches,
-                                                                  train_batches_for_loss, validation_batches_for_loss,
-                                                                  max_len, encoding_dim=encoding_dim, epochs=epochs,
-                                                                  batch_size=batch_size, device=device,
-                                                                  embedding_dim=embedding_dim, early_stopping=True)
     plot_loss(train_loss_list, val_loss_list, num_epochs, save_dir)
     evaluate(model, test_batches, test_batches_for_loss, ix_to_amino, max_len,
              device, encoding_dim, embedding_dim, save_dir)
 
-    # add embedding dim to torch.save (after results of 8/12/21)
     torch.save({
         'amino_to_ix': amino_to_ix,
         'ix_to_amino': ix_to_amino,
@@ -423,5 +453,61 @@ def main():
     }, f'{save_dir}/cnn_embedding={embedding_dim}_encoding={encoding_dim}.pt')
 
 
+def main_nni(stable_params):
+
+    datafile = stable_params["datafile"]
+    SEQ = stable_params["SEQ"]
+    epochs = stable_params["EPOCHS"]
+    encoding_dim = stable_params["ENCODING_DIM"]
+
+    nni_params = nni.get_next_parameter()
+    batch_size = nni_params["batch_size"]
+    lr = nni_params["lr"]
+    weight_decay = nni_params["weight_decay"]
+    embedding_dim = nni_params["embedding_dim"]
+    filter1 = nni_params["filter1"]
+    filter2 = nni_params["filter2"]
+    kernel1 = nni_params["kernel1"]
+    kernel2 = nni_params["kernel2"]
+    dropout_enc = nni_params["dropout_enc"]
+    dropout_dec = nni_params["dropout_dec"]
+
+    optim_params = {'lr': lr, 'weight_decay': weight_decay}
+    model_params = {'embedding_dim': embedding_dim,
+                    'filter1': filter1, 'filter2': filter2,
+                    'kernel1': kernel1, 'kernel2': kernel2,
+                    'dropout_enc': dropout_enc, 'dropout_dec': dropout_dec}
+
+    amino_acids = [letter for letter in 'ARNDCEQGHILKMFPSTWYV']
+    amino_to_ix = {amino: index for index, amino in enumerate(amino_acids)}
+
+    print('loading data')
+    sequences = load_all_data(datafile, SEQ)
+    print('finished loading')
+
+    train, validation, _, _ = train_test_split(sequences, sequences, test_size=0.2)
+
+    max_len = find_max_len(sequences)
+    print('max len:', max_len)
+
+    amino_pos_to_num = create_dict_aa_position(amino_acids, max_len)
+
+    train_batches, train_batches_for_loss = get_batches(train, amino_to_ix, amino_pos_to_num,
+                                                        batch_size, max_len)
+    validation_batches, validation_batches_for_loss = get_batches(validation, amino_to_ix,
+                                                                  amino_pos_to_num, batch_size, max_len)
+
+    device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+    _, _, _, _ = run_model(train_batches, validation_batches, train_batches_for_loss, validation_batches_for_loss,
+                           max_len, optim_params, model_params, encoding_dim=encoding_dim, epochs=epochs,
+                           batch_size=batch_size, device=device, early_stopping=True, is_nni=True)
+
+
 if __name__ == '__main__':
-    main()
+    with open('Parameters/AE_CNN_parameters.json') as f:
+        PARAMETERS = json.load(f)
+
+    if not PARAMETERS['IS_NNI']:
+        main(PARAMETERS)
+    else:
+        main_nni(PARAMETERS)

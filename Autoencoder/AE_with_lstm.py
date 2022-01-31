@@ -1,6 +1,7 @@
 import os
 import csv
 import json
+import nni
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -17,16 +18,19 @@ from pathlib import Path
 from numpy import array
 from collections import defaultdict
 
-
 # (1) Encoder
 class Encoder(nn.Module):
-    def __init__(self, num_features, embedding_size):
+    def __init__(self, num_features, embedding_size, model_params):
         super().__init__()
 
         # self.seq_len = seq_len
         self.num_features = num_features  # The number of expected features(= dimension size) in the input x
         self.embedding_size = embedding_size  # the number of features in the embedded points of the inputs' number of features
-        self.LSTM1 = nn.LSTM(num_features, embedding_size, num_layers=1, batch_first=True)
+        self.LSTM1 = nn.LSTM(num_features,
+                             embedding_size,
+                             batch_first=True,
+                             num_layers=model_params['num_layers_enc'],
+                             dropout=model_params['dropout_enc'])
 
     def forward(self, x):
         # Inputs: input, (h_0, c_0). -> If (h_0, c_0) is not provided, both h_0 and c_0 default to zero.
@@ -40,7 +44,7 @@ class Encoder(nn.Module):
 
 # (2) Decoder
 class Decoder(nn.Module):
-    def __init__(self, num_features, output_size):
+    def __init__(self, num_features, output_size, model_params):
         super().__init__()
 
         # self.seq_len = seq_len
@@ -50,8 +54,9 @@ class Decoder(nn.Module):
         self.LSTM1 = nn.LSTM(
             input_size=num_features,
             hidden_size=self.hidden_size,
-            num_layers=1,
-            batch_first=True
+            batch_first=True,
+            num_layers=model_params['num_layers_dec'],
+            dropout=model_params['dropout_dec']
         )
 
         self.fc = nn.Linear(self.hidden_size, output_size)
@@ -68,14 +73,15 @@ class Decoder(nn.Module):
 
 # (3) Autoencoder : putting the encoder and decoder together
 class LSTM_AE(nn.Module):
-    def __init__(self, num_features, encoding_dim):
+    def __init__(self, num_features, encoding_dim, model_params):
         super().__init__()
 
         self.num_features = num_features
         self.encoding_dim = encoding_dim
+        self.model_params = model_params
 
-        self.encoder = Encoder(self.num_features, self.encoding_dim)
-        self.decoder = Decoder(self.encoding_dim, self.num_features)
+        self.encoder = Encoder(self.num_features, self.encoding_dim, self.model_params)
+        self.decoder = Decoder(self.encoding_dim, self.num_features, self.model_params)
 
     def forward(self, x):
         # torch.manual_seed(0)
@@ -89,17 +95,12 @@ def loss_func(x, y):
     return MSE
 
 
-def load_all_data(path, seq, samples_count=1000):
-    all_data = []
-    for directory, subdirectories, files in os.walk(path):
-        for file in tqdm(files):
-            df = pd.read_csv(os.path.join(directory, file))
-            data = list(df[seq])
-            random.shuffle(data)
-            all_data += data
-    all_data = list(set(all_data))  # maybe unnecessary, because I removed duplicates in data processing
-    # random.shuffle(all_data)  # if data contains only 1 file, this shuffle is unnecessary
-    return all_data
+def load_all_data(datafile, seq):
+    df = pd.read_csv(datafile)
+    data = list(df[seq])
+    random.shuffle(data)
+    data = list(set(data))  # maybe unnecessary, because I removed duplicates in data processing
+    return data
 
 
 def find_max_len(sequences):
@@ -172,24 +173,26 @@ def train_epoch(batches, model, loss_function, optimizer, device):
     return total_loss / len(batches)
 
 
-def train_model(batches, validation_batches, max_len, encoding_dim, epochs, device, early_stopping=False):
-    model = LSTM_AE(num_features=20, encoding_dim=encoding_dim)
+def train_model(batches, validation_batches, optim_params, model_params, encoding_dim, epochs, device,
+                early_stopping=False, is_nni=False):
+    model = LSTM_AE(num_features=20, encoding_dim=encoding_dim, model_params=model_params)
     model.to(device)
     loss_function = loss_func
-    optimizer = optim.Adam(model.parameters(), lr=1e-3, betas=(0.9, 0.999), eps=1e-8)
+    optimizer = optim.Adam(model.parameters(), lr=optim_params['lr'], weight_decay=optim_params['weight_decay'])
     train_loss_list = list()
     val_loss_list = list()
     min_loss = float('inf')
     counter = 0
     best_model = 'None'
+
     for epoch in range(epochs):
         print(f'Epoch: {epoch + 1} / {epochs}')
         train_loss = train_epoch(batches, model, loss_function, optimizer, device)
         train_loss_list.append(train_loss)
-        # val_loss = run_validation(model, validation_batches, loss_function, max_len, vgene_dim, device)
         val_loss = run_validation(model, validation_batches, loss_function, device)
         val_loss_list.append(val_loss)
         print("Val loss:", val_loss)
+
         if val_loss < min_loss:
             min_loss = val_loss
             counter = 0
@@ -198,6 +201,13 @@ def train_model(batches, validation_batches, max_len, encoding_dim, epochs, devi
             break
         else:
             counter += 1
+
+        if is_nni:
+            nni.report_intermediate_result(val_loss)
+
+    if is_nni:
+        nni.report_final_result(min_loss)
+
     num_epochs = epoch + 1
     if best_model == 'None':
         return model, train_loss_list, val_loss_list, num_epochs
@@ -224,7 +234,7 @@ def count_mistakes(true_SEQs, pred_SEQs):
     return mis
 
 
-def evaluate(save_path, batches, model, ix_to_amino, max_len, device, EPOCHS, set_string):
+def evaluate(save_path, batches, model, ix_to_amino, max_len, encoding_dim, device, EPOCHS, set_string):
     model.eval()
     print(f'{set_string} evaluating')
     shuffle(batches)
@@ -289,7 +299,7 @@ def run_validation(model, validation, loss_function, device):
     return total_loss_val / len(validation)
 
 
-def plot_loss(train, val, num_epochs, save_dir, real_epochs):
+def plot_loss(train, val, encoding_dim, num_epochs, save_dir, real_epochs):
     epochs = [e for e in range(num_epochs)]
     label1 = 'Train'
     label2 = 'Validation'
@@ -304,13 +314,19 @@ def plot_loss(train, val, num_epochs, save_dir, real_epochs):
     plt.close()
 
 
-def main():
-    # DONT FORGET TO CHANGE THE VARIANCE IN THE LOSS FUNCTION ACCORDING TO THE DATASET
-    with open('AE_parameters.json') as f:
-        parameters = json.load(f)
-
+def main(parameters):
     root = parameters["root"]  # path to data set
+    datafile = parameters['datafile']
+    SEQ = parameters["SEQ"]
+    HLA_or_Pep = parameters["HLA_or_Pep"]
+    epochs = parameters["EPOCHS"]  # number of epochs for each model
+    encoding_dim = parameters["ENCODING_DIM"]  # number of dimensions in the embedded space
+    batch_size = parameters["BATCH_SIZE"]
     version = parameters["version"]
+
+    optim_params = {'lr': 1e-3, 'weight_decay': 0}
+    model_params = {'num_layers_enc': 1, 'num_layers_dec': 1, 'dropout_enc': 0, 'dropout_dec': 0}
+
     save_path = root + '_LSTM_Results'
 
     if not os.path.exists(save_path):
@@ -321,25 +337,12 @@ def main():
     if not os.path.exists(save_dir):
         os.mkdir(save_dir)
 
-    # replace the headers with those in the 'csv' file, put 'None' if missing
-    DEL_S = parameters["DEL_S"]  # which delimiter to use to separate headers
-    SEQ = parameters["SEQ"]
-    HLA_or_Pep = parameters["HLA_or_Pep"]
-
-    # CDR3_S = parameters["CDR3_S"]  # header of amino acid sequence of CDR3
-    # V_S = parameters["V_S"]  # header of V gene, 'None' for data set with no resolved V
-
-    EPOCHS = parameters["EPOCHS"]  # number of epochs for each model
-    # ENCODING_DIM = parameters["ENCODING_DIM"]  # number of dimensions in the embedded space
-    # SAMPLES_COUNT = parameters["SAMPLES_COUNT"]
-
     amino_acids = [letter for letter in 'ARNDCEQGHILKMFPSTWYV']
     amino_to_ix = {amino: index for index, amino in enumerate(amino_acids)}
     ix_to_amino = {index: amino for index, amino in enumerate(amino_acids)}
-    batch_size = 50
+
     print('loading data')
-    # tcrs = load_all_data(root, CDR3_S, V_S, DEL_S, SAMPLES_COUNT)
-    sequences = load_all_data(root, SEQ)
+    sequences = load_all_data(datafile, SEQ)
     print('finished loading')
 
     # tcrs = list(set([t[0][:-1] for t in tcrs]))
@@ -373,18 +376,17 @@ def main():
 
     max_len = find_max_len([seq for seq in sequences])
     print('max_len:', max_len)
-    # vgene_dict = get_all_vgenes_dict(root, V_S, DEL_S)
 
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     model, train_loss_list, val_loss_list, num_epochs = train_model(
-        train_batches, validation_batches, max_len,
-        encoding_dim=encoding_dim, epochs=EPOCHS,
+        train_batches, validation_batches, optim_params, model_params,
+        encoding_dim=encoding_dim, epochs=epochs,
         device=device, early_stopping=True)
-    plot_loss(train_loss_list, val_loss_list, num_epochs, save_dir, EPOCHS)
-    evaluate(save_dir, train_batches, model, ix_to_amino, max_len, device, EPOCHS, 'Train')
-    evaluate(save_dir, test_batches, model, ix_to_amino, max_len, device, EPOCHS, 'Test')
+    plot_loss(train_loss_list, val_loss_list, encoding_dim, num_epochs, save_dir, epochs)
+    evaluate(save_dir, train_batches, model, ix_to_amino, max_len, encoding_dim, device, epochs, 'Train')
+    evaluate(save_dir, test_batches, model, ix_to_amino, max_len, encoding_dim, device, epochs, 'Test')
 
-    # add embedding dim to torch.save
+    # add embedding dim to torch.save (?)
     torch.save({
         'amino_to_ix': amino_to_ix,
         'ix_to_amino': ix_to_amino,
@@ -396,6 +398,72 @@ def main():
     }, f'{save_dir}/lstm_model_encoding_dim={encoding_dim}.pt')
 
 
+def main_nni(stable_params):
+    datafile = stable_params['datafile']
+    SEQ = stable_params["SEQ"]
+    HLA_or_Pep = stable_params["HLA_or_Pep"]
+    epochs = stable_params["EPOCHS"]
+    encoding_dim = stable_params["ENCODING_DIM"]  # number of dimensions in the embedded space
+
+    nni_params = nni.get_next_parameter()
+    batch_size = nni_params["batch_size"]
+    lr = nni_params["lr"]
+    weight_decay = nni_params["weight_decay"]
+    num_layers_enc = nni_params["num_layers_enc"]
+    num_layers_dec = nni_params["num_layers_dec"]
+    dropout_enc = nni_params["dropout_enc"]
+    dropout_dec = nni_params["dropout_dec"]
+
+    optim_params = {'lr': lr, 'weight_decay': weight_decay}
+    model_params = {'num_layers_enc': num_layers_enc, 'num_layers_dec': num_layers_dec,
+                    'dropout_enc': dropout_enc, 'dropout_dec': dropout_dec}
+
+    amino_acids = [letter for letter in 'ARNDCEQGHILKMFPSTWYV']
+    amino_to_ix = {amino: index for index, amino in enumerate(amino_acids)}
+    # ix_to_amino = {index: amino for index, amino in enumerate(amino_acids)}
+
+    print('loading data')
+    sequences = load_all_data(datafile, SEQ)
+    print('finished loading')
+
+    vecs_data = data_preprocessing_lstm(sequences, amino_to_ix)
+
+    # train + validation sets
+    train, validation, _, _ = train_test_split(vecs_data, vecs_data, test_size=0.2)
+
+    if HLA_or_Pep == 'HLA':  # all sequences have same len
+        train_clones = convert2tensor(train)
+        validation_clones = convert2tensor(validation)
+
+        train_batches = split_to_batches_1clone(train_clones, batch_size)
+        validation_batches = split_to_batches_1clone(validation_clones, batch_size)
+
+    elif HLA_or_Pep == 'Pep':  # variable len
+        train_clones = lengths_clones(train)
+        validation_clones = lengths_clones(validation)
+
+        train_batches = split_to_batches(train_clones, batch_size)
+        validation_batches = split_to_batches(validation_clones, batch_size)
+
+    else:
+        print("Error: Sequences type has to be 'HLA' or 'Pep'")
+        return
+
+    max_len = find_max_len([seq for seq in sequences])
+    print('max_len:', max_len)
+
+    device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+    _, _, _, _ = train_model(train_batches, validation_batches, optim_params, model_params,
+                             encoding_dim=encoding_dim, epochs=epochs, device=device,
+                             early_stopping=True, is_nni=True)
+
+
 if __name__ == '__main__':
-    encoding_dim = 20
-    main()
+    with open('Parameters/AE_lstm_parameters.json') as f:
+        PARAMETERS = json.load(f)
+
+    if not PARAMETERS['IS_NNI']:
+        main(PARAMETERS)
+    else:
+        main_nni(PARAMETERS)
+
