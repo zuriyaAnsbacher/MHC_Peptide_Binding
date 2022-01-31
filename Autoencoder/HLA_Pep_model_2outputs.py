@@ -326,7 +326,7 @@ def evaluate(model, test_loader, device):
 
 
 def main():
-    with open('HLA_Pep_parameters.json') as f:
+    with open('Parameters/HLA_Pep_parameters.json') as f:
         parameters = json.load(f)
 
     root = parameters["root"]
