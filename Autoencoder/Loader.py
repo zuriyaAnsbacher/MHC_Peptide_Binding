@@ -89,13 +89,16 @@ class HLAPepDataset_2Labels(Dataset):
         pep = self.data[self.pep_header][index]
         hla_name = self.data[self.hla_name_header][index]
         hla_seq = self.data[self.hla_seq_header][index]
-        binary = self.data[self.binary_header][index]
-        continuous = self.data[self.cont_header][index]
-        flag = self.data[self.flag_header][index]
+        # binary = self.data[self.binary_header][index]
+        # continuous = self.data[self.cont_header][index]
+        # flag = self.data[self.flag_header][index]
+        binary = float(self.data[self.binary_header][index])
+        continuous = float(self.data[self.cont_header][index])
+        flag = float(self.data[self.flag_header][index])
 
         hla = self.convert_to_numeric(hla_seq)
         pep = self.convert_to_one_hot(pep, seq_type='pep')
-        continuous = np.log(continuous + 1/np.e) if (flag == 1) else continuous # epsilon = 1/e (for log(0+epsilon)->-1)
+        continuous = np.log(float(continuous) + 1/np.e) if (flag == 1) else continuous # epsilon = 1/e (for log(0+epsilon)->-1)
         hla_oneHot = self.convert_to_one_hot(hla_name, seq_type='hla')
 
         sample = (pep, hla, binary, continuous, flag, hla_oneHot)
