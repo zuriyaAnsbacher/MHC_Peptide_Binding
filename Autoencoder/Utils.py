@@ -1,9 +1,89 @@
 import csv
 import torch
+import torch.nn as nn
+import pandas as pd
 from scipy.special import expit
 from sklearn.metrics import roc_auc_score, r2_score
 
-# changed name
+from Models import CNN_AE, LSTM_AE, HLA_Pep_Model
+from Loader import HLAPepDataset_2Labels
+
+
+def load_model_dict(model_path):
+    if torch.cuda.is_available():
+        model_dict = torch.load(model_path)
+    else:
+        model_dict = torch.load(model_path, map_location=torch.device('cpu'))
+    return model_dict
+
+
+def get_existing_model(model_dict, model_name, max_len_hla=183, is_test=False):
+    if model_name == 'pep':
+        model = LSTM_AE(num_features=20, encoding_dim=model_dict['encoding_dim'])
+    elif model_name == 'hla':
+        model = CNN_AE(max_len=max_len_hla, encoding_dim=model_dict['encoding_dim'],
+                       batch_size=1 if is_test else model_dict['batch_size'])
+    state_dict = model_dict['model_state_dict']
+    model.load_state_dict(state_dict)
+
+    return model
+
+
+def get_combined_model(hla_model, hla_model_dict, pep_model, pep_model_dict, combined_model_dict,
+                       combined_model_params, concat_type):
+    combined_model = HLA_Pep_Model(pep_model_dict['encoding_dim'], hla_model_dict['encoding_dim'],
+                                   pep_model, hla_model, concat_type=concat_type, concat_oneHot_dim=31,
+                                   concat_emb_dim=25, model_params=combined_model_params)
+    state_dict = combined_model_dict['model_state_dict']
+    combined_model.load_state_dict(state_dict)
+
+    return combined_model
+
+
+def get_dataset_test(data, headers, hla_freq_path, hla_model_dict, concat_oneHot_dim):
+    hla_oneHotMap = get_hla_oneHot_map(hla_freq_path, n_rows=concat_oneHot_dim)  # 31 most common
+    dataset = HLAPepDataset_2Labels(data, headers, hla_oneHotMap, hla_model_dict["amino_pos_to_num"])
+    return dataset
+
+
+def get_hla_oneHot_map(hla_freq_path, n_rows):
+    df = pd.read_csv(hla_freq_path, nrows=n_rows)
+    HLAs = list(df['HLA'])
+    return {HLAs[i]: i for i in range(len(HLAs))}
+
+
+def evaluate(model, test_loader, device):
+    model.eval()
+    preds1, preds2 = [], []
+    trues1, trues2 = [], []
+    flags = []
+    sigmoid = nn.Sigmoid()
+
+    with torch.no_grad():
+        for batch in test_loader:
+            pep, hla, y1, y2, flag, hla_oneHot, emb = batch
+            pep, hla, y1, y2, flag, hla_oneHot, emb = pep.to(device), hla.to(device), y1.to(device), y2.to(device), \
+                                                      flag.to(device), hla_oneHot.to(device), emb.to(device)
+
+            pred1, pred2 = model(pep, hla, hla_oneHot, emb)
+            pred1, pred2 = pred1.view(-1), pred2.view(-1)
+
+            preds1 += sigmoid(pred1).detach().cpu().numpy().tolist()
+            trues1 += y1.tolist()
+            preds2 += pred2.tolist()
+            trues2 += y2.tolist()
+            flags += flag.tolist()
+
+
+    preds1 = [preds1[i] for i in range(len(flags)) if flags[i] == 0]
+    trues1 = [trues1[i] for i in range(len(flags)) if flags[i] == 0]
+    preds2 = [preds2[i] for i in range(len(flags)) if flags[i] == 1]
+    trues2 = [trues2[i] for i in range(len(flags)) if flags[i] == 1]
+
+    auc = roc_auc_score(trues1, preds1)
+    r2 = r2_score(trues2, preds2)
+    print("auc test: ", round(auc, 4), " | ", "r2 test: ", round(r2, 4))
+
 
 def evaluate_splitScoreByFreqHLA(model, test_loader, test_df, test_sampler, batch_size, device):
 
@@ -11,7 +91,7 @@ def evaluate_splitScoreByFreqHLA(model, test_loader, test_df, test_sampler, batc
         idx = test_sampler.iter_order[ind_batch][ind_sample]
         hla_name = test_df['HLA name'][idx]
         freq = name2freq[hla_name]
-        if freq >= 2944:
+        if freq >= 2585:
             return 'high'
         elif freq <= 87:
             return 'low'

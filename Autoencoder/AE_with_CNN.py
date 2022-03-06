@@ -8,120 +8,12 @@ import random
 from random import shuffle
 from tqdm import tqdm
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 
-
-class Encoder(nn.Module):
-    def __init__(self, max_len, encoding_dim, batch_size, model_params):
-        super().__init__()
-        self.max_len = max_len
-        self.encoding_dim = encoding_dim
-        self.vocab_size = max_len * 20  # + 2
-        self.batch_size = batch_size
-        self.embedding_dim = model_params["embedding_dim"]
-        self.filter1 = model_params["filter1"]
-        self.filter2 = model_params["filter2"]
-        self.kernel1 = model_params["kernel1"]
-        self.kernel2 = model_params["kernel2"]
-        self.dropout_enc = model_params["dropout_enc"]
-
-        self.size_after_conv = self.calculate_size_after_conv()
-
-        self.embedding = nn.Embedding(self.vocab_size, self.embedding_dim, padding_idx=-1)
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(1, self.filter1, kernel_size=(self.kernel1, self.kernel2), padding=0),
-            nn.ReLU(),
-            nn.MaxPool2d(2)
-        )
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(self.filter1, self.filter2, kernel_size=(self.kernel1, self.kernel2), padding=0),
-            nn.ReLU(),
-            nn.MaxPool2d(2)
-        )
-        self.fc1 = nn.Sequential(
-            nn.Linear(self.size_after_conv, 512),  # 4320
-            nn.ReLU(),
-            nn.Dropout(self.dropout_enc)
-        )
-        self.fc2 = nn.Linear(512, self.encoding_dim)
-
-    def forward(self, x):
-        x = self.embedding(x.long())
-        # input size to Conv2d: (batch, number channels, height, width)
-        x = x.view(self.batch_size, self.embedding_dim, -1).unsqueeze(1)
-        x = self.conv1(x)
-        x = self.conv2(x)
-        x = x.view(x.size(0), -1)
-        x = self.fc1(x)
-        x = self.fc2(x)
-        return x
-
-    def calculate_size_after_conv(self):
-        x_size = self.embedding_dim
-        y_size = self.max_len
-
-        # conv1 -> nn.Conv2d
-        x_size = (x_size - self.kernel1) + 1
-        y_size = (y_size -self.kernel2) + 1
-        # conv1 -> nn.MaxPool2d(2)
-        x_size = ((x_size - 2) // 2) + 1
-        y_size = ((y_size - 2) // 2) + 1
-
-        # conv2 -> nn.Conv2d
-        x_size = (x_size - self.kernel1) + 1
-        y_size = (y_size -self.kernel2) + 1
-        # conv2 -> nn.MaxPool2d(2)
-        x_size = ((x_size - 2) // 2) + 1
-        y_size = ((y_size - 2) // 2) + 1
-
-        return x_size * y_size * self.filter2
-
-
-class Decoder(nn.Module):
-    def __init__(self, max_len, encoding_dim, model_params):
-        super().__init__()
-        self.max_len = max_len
-        self.encoding_dim = encoding_dim
-        self.dropout_dec = model_params['dropout_dec']
-
-        self.fc1 = nn.Sequential(
-            nn.Linear(self.encoding_dim, 512),
-            nn.ELU(),
-            nn.Dropout(self.dropout_dec),
-        )
-        self.fc2 = nn.Sequential(
-            nn.Linear(512, 1024),
-            nn.ELU(),
-            nn.Dropout(self.dropout_dec),
-            nn.Linear(1024, self.max_len * 20)   # self.max_len * 21
-        )
-
-    def forward(self, x):
-        x = self.fc1(x)
-        x = self.fc2(x)
-        return x
-
-
-class CNN_AE(nn.Module):
-    def __init__(self, max_len, encoding_dim, batch_size, model_params):
-        super().__init__()
-
-        self.max_len = max_len
-        self.encoding_dim = encoding_dim
-        self.batch_size = batch_size
-        self.model_params = model_params
-
-        self.encoder = Encoder(self.max_len, self.encoding_dim, self.batch_size, self.model_params)
-        self.decoder = Decoder(self.max_len, self.encoding_dim, self.model_params)
-
-    def forward(self, x):
-        encoded = self.encoder(x)
-        decoded = self.decoder(encoded)
-        return encoded, decoded
+from Models import CNN_AE
 
 
 def load_all_data(datafile, SEQ):

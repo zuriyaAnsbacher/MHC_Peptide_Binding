@@ -3,7 +3,6 @@ import csv
 import json
 import nni
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import pandas as pd
 from random import shuffle
@@ -11,83 +10,12 @@ from sklearn.model_selection import train_test_split
 import torch.optim as optim
 from tqdm import tqdm
 import random
-import pickle
 import matplotlib.pyplot as plt
 import copy
-from pathlib import Path
 from numpy import array
 from collections import defaultdict
 
-# (1) Encoder
-class Encoder(nn.Module):
-    def __init__(self, num_features, embedding_size, model_params):
-        super().__init__()
-
-        # self.seq_len = seq_len
-        self.num_features = num_features  # The number of expected features(= dimension size) in the input x
-        self.embedding_size = embedding_size  # the number of features in the embedded points of the inputs' number of features
-        self.LSTM1 = nn.LSTM(num_features,
-                             embedding_size,
-                             batch_first=True,
-                             num_layers=model_params['num_layers_enc'],
-                             dropout=model_params['dropout_enc'])
-
-    def forward(self, x):
-        # Inputs: input, (h_0, c_0). -> If (h_0, c_0) is not provided, both h_0 and c_0 default to zero.
-        x = x.view(x.size(0), -1, self.num_features)
-        seq_len = x.size(1)
-        self.LSTM1.flatten_parameters()
-        x, (hidden_state, cell_state) = self.LSTM1(x)
-        x = x[:, -1, :]
-        return x, seq_len
-
-
-# (2) Decoder
-class Decoder(nn.Module):
-    def __init__(self, num_features, output_size, model_params):
-        super().__init__()
-
-        # self.seq_len = seq_len
-        self.num_features = num_features
-        self.hidden_size = (2 * num_features)
-        self.output_size = output_size
-        self.LSTM1 = nn.LSTM(
-            input_size=num_features,
-            hidden_size=self.hidden_size,
-            batch_first=True,
-            num_layers=model_params['num_layers_dec'],
-            dropout=model_params['dropout_dec']
-        )
-
-        self.fc = nn.Linear(self.hidden_size, output_size)
-
-    def forward(self, x, seq_len):
-        x = x.unsqueeze(1).repeat(1, seq_len, 1)
-        self.LSTM1.flatten_parameters()
-        x, (hidden_state, cell_state) = self.LSTM1(x)
-        x = self.fc(x)
-        x = F.softmax(x, dim=2)
-        x = x.view(x.size(0), -1)
-        return x
-
-
-# (3) Autoencoder : putting the encoder and decoder together
-class LSTM_AE(nn.Module):
-    def __init__(self, num_features, encoding_dim, model_params):
-        super().__init__()
-
-        self.num_features = num_features
-        self.encoding_dim = encoding_dim
-        self.model_params = model_params
-
-        self.encoder = Encoder(self.num_features, self.encoding_dim, self.model_params)
-        self.decoder = Decoder(self.encoding_dim, self.num_features, self.model_params)
-
-    def forward(self, x):
-        # torch.manual_seed(0)
-        encoded, seq_len = self.encoder(x)
-        decoded = self.decoder(encoded, seq_len)
-        return encoded, decoded
+from Models import LSTM_AE
 
 
 def loss_func(x, y):
