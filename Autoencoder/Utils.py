@@ -98,3 +98,4 @@ def evaluate_splitScoreByFreqHLA(model, test_loader, test_df, test_sampler, batc
         auc = roc_auc_score(trues1, preds1)
         r2 = r2_score(trues2, preds2)
         print(f"Case {case}:\tauc test: ", round(auc, 4), " | ", "r2 test: ", round(r2, 4))
+
