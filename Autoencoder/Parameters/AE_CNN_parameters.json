@@ -1,12 +1,14 @@
 {
   "root" : "HLA-A",
-  "version": "3",
-  "DEL_S" : ",",
+  "datafile": "../Data/HLA-I Seq/all_seq_A.csv",
+  "version": "CV_vers2_",
   "SEQ": "HLA_SEQ",
   "HLA_or_Pep": "HLA",
 
   "EPOCHS" : 1000,
   "ENCODING_DIM" : 50,
   "EMBEDDING_DIM": 15,
-  "BATCH_SIZE": 50
+  "BATCH_SIZE": 64,
+
+  "IS_NNI": false
 }

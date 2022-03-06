@@ -1,0 +1,13 @@
+{
+  "root" : "Pep",
+  "datafile": "../Data/IEDB_processed/Pep/epitope_full_v3.csv",
+  "version": "CV",
+  "SEQ": "Pep",
+  "HLA_or_Pep": "Pep",
+
+  "EPOCHS" : 800,
+  "ENCODING_DIM" : 20,
+  "BATCH_SIZE": 64,
+
+  "IS_NNI": false
+}
