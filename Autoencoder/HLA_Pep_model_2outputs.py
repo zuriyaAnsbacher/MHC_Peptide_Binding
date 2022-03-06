@@ -16,7 +16,7 @@ from AE_with_CNN import CNN_AE
 from AE_with_lstm import LSTM_AE
 from Loader import HLAPepDataset_2Labels
 from Sampler import SamplerByLength
-from Auxiliary_functions import evaluate_splitScoreByFreqHLA
+from Utils import evaluate_splitScoreByFreqHLA
 
 
 class HLA_Pep_Model(nn.Module):

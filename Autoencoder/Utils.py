@@ -3,6 +3,7 @@ import torch
 from scipy.special import expit
 from sklearn.metrics import roc_auc_score, r2_score
 
+# changed name
 
 def evaluate_splitScoreByFreqHLA(model, test_loader, test_df, test_sampler, batch_size, device):
 
