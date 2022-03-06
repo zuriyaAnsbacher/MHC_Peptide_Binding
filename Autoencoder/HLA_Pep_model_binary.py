@@ -12,8 +12,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score
 import matplotlib.pyplot as plt
 
-from AE_with_CNN import CNN_AE
-from AE_with_lstm import LSTM_AE
+from Models import CNN_AE, LSTM_AE
 from Loader import HLAPepDataset
 from Sampler import SamplerByLength
 
