@@ -63,7 +63,7 @@ class HLAPepDataset(Dataset):
 
 
 class HLAPepDataset_2Labels(Dataset):
-    def __init__(self, data, headers, hla_oneHot, amino_pos_to_num):
+    def __init__(self, data, headers, hla_oneHot, amino_pos_to_num, concat_type):
         self.data = data  # DataFrame
 
         pep_header, hla_name_header, hla_seq_header, binary_header, cont_header, flag_header = headers
@@ -73,6 +73,7 @@ class HLAPepDataset_2Labels(Dataset):
         self.binary_header = binary_header
         self.cont_header = cont_header
         self.flag_header = flag_header
+        self.concat_type = concat_type
 
         self.amino_pos_to_num = amino_pos_to_num
         self.amino_acids = [letter for letter in 'ARNDCEQGHILKMFPSTWYV']
@@ -80,7 +81,7 @@ class HLAPepDataset_2Labels(Dataset):
         self.pep_oneHot = self.get_oneHot_map_pep()
 
         self.hla_oneHot = hla_oneHot
-        self.common_hla_oneHot = self.get_oneHot_common_hla()
+        self.common_hla_oneHot = self.get_oneHot_common_hla() if self.concat_type != 'None' else 0
 
     def __len__(self):
         return len(self.data)
@@ -89,17 +90,14 @@ class HLAPepDataset_2Labels(Dataset):
         pep = self.data[self.pep_header][index]
         hla_name = self.data[self.hla_name_header][index]
         hla_seq = self.data[self.hla_seq_header][index]
-        # binary = self.data[self.binary_header][index]
-        # continuous = self.data[self.cont_header][index]
-        # flag = self.data[self.flag_header][index]
         binary = float(self.data[self.binary_header][index])
         continuous = float(self.data[self.cont_header][index])
         flag = float(self.data[self.flag_header][index])
 
         hla = self.convert_to_numeric(hla_seq)
         pep = self.convert_to_one_hot(pep, seq_type='pep')
-        continuous = np.log(float(continuous) + 1/np.e) if (flag == 1) else continuous # epsilon = 1/e (for log(0+epsilon)->-1)
-        hla_oneHot = self.convert_to_one_hot(hla_name, seq_type='hla')
+        continuous = np.log(float(continuous) + 1/np.e) if (flag == 1) else continuous # epsilon=1/e (for log(0+eps)=-1)
+        hla_oneHot = self.convert_to_one_hot(hla_name, seq_type='hla') if self.concat_type != 'None' else 0
 
         sample = (pep, hla, binary, continuous, flag, hla_oneHot)
         return sample
@@ -118,11 +116,12 @@ class HLAPepDataset_2Labels(Dataset):
         return one_hot
 
     def convert_to_numeric(self, seq):
-        vec = []
+        vec = [0] * len(seq)
         for i in range(len(seq)):
             amino = seq[i]
             pair = (amino, i)
-            vec.append(self.amino_pos_to_num[pair])
+            vec[i] = self.amino_pos_to_num[pair]
+            # vec.append(self.amino_pos_to_num[pair])
         return vec
 
     def convert_to_one_hot(self, seq, seq_type):
@@ -157,7 +156,10 @@ class HLAPepDataset_2Labels(Dataset):
         lst.append(torch.Tensor(continuous))
         lst.append(torch.Tensor(flag))
         lst.append(torch.Tensor(hla_oneHot))
-        lst.append(torch.Tensor(self.oneHot_to_scalar(hla_oneHot)))
+        if self.concat_type != 'None':
+            lst.append(torch.Tensor(self.oneHot_to_scalar(hla_oneHot)))
+        else:
+            lst.append(torch.Tensor(hla_oneHot))
         return lst
 
 
