@@ -70,7 +70,7 @@ class CNN_Encoder(nn.Module):
 
         # conv2 -> nn.Conv2d
         x_size = (x_size - self.kernel1) + 1
-        y_size = (y_size -self.kernel2) + 1
+        y_size = (y_size - self.kernel2) + 1
         # conv2 -> nn.MaxPool2d(2)
         x_size = ((x_size - 2) // 2) + 1
         y_size = ((y_size - 2) // 2) + 1
@@ -246,3 +246,50 @@ class HLA_Pep_Model(nn.Module):
             if torch.count_nonzero(hla_oneHot[i]).item() != 0:  # hla with high freq
                 hla_encoded[i] = torch.zeros(hla_encoded[i].size())
         return hla_encoded
+
+
+class HLA_Pep_AttMatrix(nn.Module):
+    def __init__(self, encoding_dim_pep, encoding_dim_hla, pep_AE, hla_AE, model_params, device):
+        super().__init__()
+
+        self.hidden_size = model_params['hidden_size']
+        self.activ_func = model_params['activ_func']
+        self.encoding_dim_pep = encoding_dim_pep
+        self.encoding_dim_hla = encoding_dim_hla
+        self.hla_AE = hla_AE
+        self.pep_AE = pep_AE
+
+        self.concat_type = 'None'
+
+        self.att_layers = model_params['att_layers']
+        self.W = nn.Parameter(torch.randn(self.encoding_dim_hla, self.att_layers, self.encoding_dim_pep,
+                                          requires_grad=True, device=device))
+
+        self.fc1 = nn.Sequential(nn.Linear(self.att_layers, self.hidden_size))
+
+        self.fc2A = nn.Linear(self.hidden_size, 1)
+        self.fc2B = nn.Linear(self.hidden_size, 1)
+
+    def forward(self, pep, hla, hla_oneHot, emb):
+        pep_encoded, _ = self.pep_AE(pep)
+        hla_encoded, _ = self.hla_AE(hla)
+
+        # (W [50, 5, 20] * pep.T [20, 64]) --> [50, 5, 64].T --> [64, 5, 50]
+        x = torch.matmul(self.W, pep_encoded.T).T
+
+        # (x [64, 5, 50] * hla.T [50, 64]) --> [64, 5, 64]
+        x = self.activ_func(torch.matmul(x, hla_encoded.T))
+
+        # [64, 5, 64] --> [64, 64, 5]
+        x = x.permute(0, 2, 1)
+
+        # get 5dim vectors in diagonal and [5, 64].T --> [64, 5]
+        x = torch.diagonal(x, 0).T
+
+        # x = x.unsqueeze(1)  # add dim ([size]->[size, 1])
+
+        x = self.fc1(x)
+        y1 = self.fc2A(x)
+        y2 = self.fc2B(x)
+
+        return y1, y2
