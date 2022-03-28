@@ -36,10 +36,6 @@ def create_dict_aa_position(amino_acids, max_len):
             pair = (amino, pos)
             amino_pos_to_num[pair] = count
             count += 1
-    # amino = 'X'
-    # for pos in range(max_len):
-    #     pair = (amino, pos)
-    #     amino_pos_to_num[pair] = count
 
     return amino_pos_to_num
 
@@ -292,11 +288,11 @@ def main(parameters):
     batch_size = parameters["BATCH_SIZE"]
     embedding_dim = parameters["EMBEDDING_DIM"]
 
-    optim_params = {'lr': 1e-4, 'weight_decay': 0}
+    optim_params = {'lr': 1e-4, 'weight_decay': 8e-7}
     model_params = {'embedding_dim': embedding_dim,
-                    'filter1': 16, 'filter2': 32,
-                    'kernel1': 2, 'kernel2': 2,
-                    'dropout_enc': 0.2, 'dropout_dec': 0.1}
+                    'filter1': 8, 'filter2': 16,
+                    'kernel1': 2, 'kernel2': 3,
+                    'dropout_enc': 0, 'dropout_dec': 0}
 
     amino_acids = [letter for letter in 'ARNDCEQGHILKMFPSTWYV']
     # amino_to_ix = {amino: index for index, amino in enumerate(amino_acids + ['X'])}
