@@ -58,6 +58,7 @@ def clear_and_extract_data(df, labels_num):
     df = df[df[39].str.contains('human')]  # human Host (if want human epitope: it's in column 19)
     df = df[df[95].str.contains(':')]  # for removing values such 'HLA class I', 'HLA-A'
     df = df[~df[95].str.contains('mutant')]  # for removing values such 'A*02:01 K66A mutant'
+    df = df[~df[95].str.contains('Mamu')]  # for removing values such 'Mamu-B*008'
 
     pep = df[11]
     hla = df[95]
@@ -226,13 +227,14 @@ def create_negative_samples(df, labels_num):
 
 def process():
     part = '00'
-    specific_allele = 'A'  # A/B/C or None if want all three of them
+    specific_allele = 'C'  # A/B/C or None if want all three of them
 
     binary_or_binaryContinuous = 'binaryContinuous'
     labels_num = 1 if binary_or_binaryContinuous == 'binary' else 2
 
     input_file = f'../Data/IEDB_orig/MHC_and_Pep/mhc_ligand_full_{part}.csv'
-    output_file = f'../Data/IEDB_processed/MHC_and_Pep/mhc_pep{part}{specific_allele}_25percNeg_Pep7_11_2labels.csv'
+    # output_file = f'../Data/IEDB_processed/MHC_and_Pep/mhc_pep{part}{specific_allele}_25percNeg_Pep7_11_2labels.csv'
+    output_file = f'../Data/IEDB_processed/MHC_and_Pep/mhc_pep{part}{specific_allele}_NoArtificialNeg_Pep7_11_2labels.csv'
     seq_json = '../Data/HLA-I Seq/dict_seq.json'
 
     if part == '00':
@@ -259,7 +261,7 @@ def process():
         df = split_samples_to_labels(df)
         df = drop_nan(df)
         df = add_sequences(df, seq_json, labels_num)
-        df = create_negative_samples(df, labels_num)
+        # df = create_negative_samples(df, labels_num)
 
         df.to_csv(output_file, index=False)
 
