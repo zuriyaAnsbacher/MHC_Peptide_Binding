@@ -1,0 +1,19 @@
+I took the best params (nni) from HLA-A and run on HLA-B
+
+hyper-parameters, model detail like in 'HLA(CNN)_Pep(lstm)_FC_2out_after_nni_4concat_6|3|22.txt', with concat_type=None
+
+Data file:
+    'mhc_pep00B_NoArtificialNeg_Pep7_11_2labels.csv'
+    Same process like before, just with HLA-B
+
+
+Results:
+    Epoch: 182 / 300
+    loss train:  0.0032  |  auc train:  0.9884  |  r2 train:  0.5804
+    loss val:  0.0034    |  auc val:  0.9801    |  r2 val:  0.5765
+    auc test:  0.982  |  r2 test:  0.571
+
+
+Path to results:
+        'Autoencoder/HLA_Pep_CNN_LSTM_FC_Results/CNN_LSTM_FC_version_HLA-B_1'
+
