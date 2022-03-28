@@ -9,9 +9,9 @@ from Models import CNN_AE, LSTM_AE, HLA_Pep_Model
 from Loader import HLAPepDataset_2Labels
 
 
-def load_model_dict(model_path):
+def load_model_dict(model_path, cuda_num):
     if torch.cuda.is_available():
-        model_dict = torch.load(model_path)
+        model_dict = torch.load(model_path, map_location=f'cuda:{cuda_num}')
     else:
         model_dict = torch.load(model_path, map_location=torch.device('cpu'))
     return model_dict
@@ -40,9 +40,9 @@ def get_combined_model(hla_model, hla_model_dict, pep_model, pep_model_dict, com
     return combined_model
 
 
-def get_dataset_test(data, headers, hla_freq_path, hla_model_dict, concat_oneHot_dim):
+def get_dataset_test(data, headers, hla_freq_path, hla_model_dict, concat_oneHot_dim, concat_type):
     hla_oneHotMap = get_hla_oneHot_map(hla_freq_path, n_rows=concat_oneHot_dim)  # 31 most common
-    dataset = HLAPepDataset_2Labels(data, headers, hla_oneHotMap, hla_model_dict["amino_pos_to_num"])
+    dataset = HLAPepDataset_2Labels(data, headers, hla_oneHotMap, hla_model_dict["amino_pos_to_num"], concat_type)
     return dataset
 
 
