@@ -14,10 +14,11 @@ class SamplerByLength(Sampler):
     """organize data to batches such that each batch contains samples with same length of peptides"""
 
     def __init__(self, data_source, bucket_boundaries, batch_size):
+        super().__init__(data_source)
         ind_n_len = []
         for i in range(len(data_source)):
             p = data_source[i]
-            ind_n_len.append((i, len(p[0])))  # [(idx_tensor_data, len), ...]
+            ind_n_len.append((i, len(p[0])))  # [(idx_tensor_data, pep_len), ...]
 
         self.data_source = data_source
         self.ind_n_len = ind_n_len
