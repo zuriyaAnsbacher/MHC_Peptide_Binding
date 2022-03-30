@@ -1,0 +1,15 @@
+Like 'HLA(CNN)_Pep(lstm)_FC_2out_AttMtx_after_nni_concatNone_28|3|22.txt', just with all the data
+
+Data file:
+    'mhc_pep_00-05A_NoArtificial_Pep7_11_2labels.csv'
+
+Results:
+    Epoch: 180 / 300
+    loss train:  0.0035  |  auc train:  0.9434  |  r2 train:  0.3044
+    loss val:  0.0036    |  auc val:  0.9341    |  r2 val:  0.2925
+    Case high:	auc test:  0.9351  |  r2 test:  0.291
+    Case medium:	auc test:  0.9231  |  r2 test:  0.2607
+    Case low:	auc test:  0.7516  |  r2 test:  -0.8299
+
+Path to results:
+        'Autoencoder/HLA_Pep_CNN_LSTM_FC_Results/CNN_LSTM_FC_version11_NoneAttMtx_AllData'

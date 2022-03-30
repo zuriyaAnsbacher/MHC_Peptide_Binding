@@ -1,0 +1,17 @@
+Like '../HLA-A/AE_CNN_HLA_after_nni_2|2|22.txt'. same hyper-parameters, model details
+
+Data file:
+    all_seq_C.csv (processed)
+    contains 2065 HLA-B sequences
+    processing done by:
+        drop duplicates
+
+
+Results:
+    Epoch: 1000 / 1000
+    test results:
+        Accuracy,1 Mismatch,2 Mismatches,3 Mismatches
+        0.3567708333333333,0.9817708333333334,0.9921875,0.9973958333333334
+
+Path to results:
+    'Autoencoder/HLA-C_CNN_Results/CNN_version1'
