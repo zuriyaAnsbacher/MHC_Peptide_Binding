@@ -1,0 +1,30 @@
+As 'version4/Description_30|3|22.txt' with these changes:
+
+Data file:
+    'mhc_pep00ABC_NoArtificial_Pep7_11_2labels.csv'
+    same processing as before
+
+Model details:
+    The propose of this running is trying to improve the scores of the rare HLA.
+    To do that, I initialized the model weights by the weights of the trained model
+    of HLA-ABC ('HLA-ABC&Pep/version4/model_hlaABC.pt'),
+    and I add weights to the loss, that based on the HLA frequency:
+    For each HLA, I took its frequency in the data (the number of timed that this HLA appears in the IEDB data),
+    and determine its 'loss weight' as: sqrt(1/freq). (so that rare HLA get higher weight).
+    Then, when I calculated the loss, I multiplied the weight with the loss (MSE/BCE).
+
+    When I print the scores, I split it to: high (HLA that exists more than 100 times in the data) and low (less than 100).
+    I did it in order to see if the scores of the rare HLA (low) is improved.
+
+Results:
+    Epoch: 32 / 400
+    loss train:  4.41e-05
+    Case high:	auc train: 0.9541 |  r2 train: 0.4576
+    Case low:	auc train: 0.9514 |  r2 train: 0.5928
+    loss val:  4.32e-05
+    Case high:	auc val: 0.9572 |  r2 val: 0.4879
+    Case low:	auc val: 0.9562 |  r2 val: 0.2575
+
+    auc test:  0.9668  |  r2 test:  0.5182
+
+Note: the files 'auc.pdf', 'r2.pdf' in the results folder are incorrect (because in this running I didn't save the auc and the r2)

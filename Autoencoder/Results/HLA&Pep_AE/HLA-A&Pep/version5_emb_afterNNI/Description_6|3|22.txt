@@ -1,0 +1,62 @@
+I run the 4 options of concat_type (None, oneHot, emb, oneHot&zero) after I tuned parameters with NNI
+
+Script:
+    HLA_Pep_model_2outputs.py
+
+Hyper-parameters:
+    Common parameters:
+        batch size: 64
+        epochs: 800
+        optimizer: Adam. with derivative **over all** the network (AEs, too) (in the previous model we derived only fc after AEs)
+        loss functions:
+            F.binary_cross_entropy_with_logits
+            F.mse_loss
+        counter of early stopping: 30
+        train-val-test as previous files (68%, 12%, 20%)
+
+   Separate parameters (from NNI):
+       concat_type == 'None':
+            optim_params = {'lr': 1e-3, 'weight_decay': 7e-7, 'alpha': 0.6}
+            model_params = {'hidden_size': 128, 'activ_func': nn.ReLU(), 'dropout': 0.2}
+       concat_type == 'oneHot':
+            optim_params = {'lr': 1e-3, 'weight_decay': 4e-7, 'alpha': 0.6}
+            model_params = {'hidden_size': 128, 'activ_func': nn.Tanh(), 'dropout': 0.15}
+       concat_type == 'emb':
+            optim_params = {'lr': 1e-3, 'weight_decay': 7e-7, 'alpha': 0.6}
+            model_params = {'hidden_size': 64, 'activ_func': nn.ReLU(), 'dropout': 0.1, 'concat_emb_dim': 25}
+       concat_type == 'oneHot&zero':
+            optim_params = {'lr': 1e-3, 'weight_decay': 5e-7, 'alpha': 0.65}
+            model_params = {'hidden_size': 128, 'activ_func': nn.ReLU(), 'dropout': 0.25}
+
+Model details:
+    Like in previous file, with the parameters above
+
+Data file:
+    mhc_pep00A_45percNeg_Pep7_11_2labels.csv
+    same processing like before, but without creating artificial negatives
+    pos~90k, neg~70k
+
+Results:
+    concat_type == 'None':
+        Epoch: 225 / 800
+        loss train:  0.005  |  auc train:  0.9607  |  r2 train:  0.5325
+        loss val:  0.0051    |  auc val:  0.9526    |  r2 val:  0.5411
+        auc test:  0.9513  |  r2 test:  0.5298
+
+    concat_type == 'oneHot':
+        Epoch: 177 / 800
+        loss train:  0.005  |  auc train:  0.9617  |  r2 train:  0.5472
+        loss val:  0.0052    |  auc val:  0.9498    |  r2 val:  0.5313
+        auc test:  0.9522  |  r2 test:  0.5284
+
+    concat_type == 'emb':
+        Epoch: 248 / 800
+        loss train:  0.005  |  auc train:  0.9605  |  r2 train:  0.5394
+        loss val:  0.0052    |  auc val:  0.9521    |  r2 val:  0.531
+        auc test:  0.9527  |  r2 test:  0.5367
+
+    concat_type == 'oneHot&zero':
+        Epoch: 242 / 800
+        loss train:  0.0052  |  auc train:  0.9622  |  r2 train:  0.5262
+        loss val:  0.0054    |  auc val:  0.9529    |  r2 val:  0.5345
+        auc test:  0.9521  |  r2 test:  0.5342

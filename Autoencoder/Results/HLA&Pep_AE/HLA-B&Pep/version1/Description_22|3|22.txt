@@ -1,0 +1,13 @@
+I took the best params (nni) from HLA-A and run on HLA-B
+
+hyper-parameters, model detail like in 'HLA-A&Pep/version5_None_afterNNI/Description_6|3|22.txt', with concat_type=None
+
+Data file:
+    'mhc_pep00B_NoArtificialNeg_Pep7_11_2labels.csv'
+    Same process like before, just with HLA-B
+
+Results:
+    Epoch: 182 / 300
+    loss train:  0.0032  |  auc train:  0.9884  |  r2 train:  0.5804
+    loss val:  0.0034    |  auc val:  0.9801    |  r2 val:  0.5765
+    auc test:  0.982  |  r2 test:  0.571

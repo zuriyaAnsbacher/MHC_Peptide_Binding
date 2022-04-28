@@ -1,0 +1,10 @@
+Like 'version1/Description_18|1|22.txt' (in Script, Hyper-parameters, Data file)
+But different in the Model details: without the addition of the one-hot concat
+(so actually, the model is like in 'HLA-ABC&Pep/version3_invalid/Description_13|1|22.txt')
+
+I run it because I wanted to compare between the results of the model with concat one-hot, and without,
+and I needed to do the comparison on same datafile.
+
+Results:
+    Num epochs: 250 / 250
+    auc test:  0.9008  |  r2 test:  0.2709

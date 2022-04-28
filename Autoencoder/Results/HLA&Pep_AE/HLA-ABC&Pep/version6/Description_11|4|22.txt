@@ -1,0 +1,14 @@
+As 'version5/Description_10|4|22.txt', just with run on all the data
+
+Data file:
+    'mhc_pep_00-05ABC_NoArtificial_Pep7_11_2labels.csv'
+
+Results:
+    Epoch: 32 / 400
+    loss train:  2.02e-05
+    Case high:	auc train: 0.9654 |  r2 train: 0.4108
+    Case low:	auc train: 0.927 |  r2 train: 0.4135
+    loss val:  1.99e-05
+    Case high:	auc val: 0.9691 |  r2 val: 0.4265
+    Case low:	auc val: 0.8996 |  r2 val: 0.4928
+    auc test:  0.9735  |  r2 test:  0.4551

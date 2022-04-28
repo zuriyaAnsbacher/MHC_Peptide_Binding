@@ -1,0 +1,20 @@
+Like 'version1_invalid/Description_21|12|21.txt' with these changes:
+
+
+Create Sampler (SamplerByLength) such that the model will be able to get peptides with variable length.
+The sampler creates batches, and each batch contains peptides with same length.
+
+Data file:
+    mhc_pep05_15perc_neg_PepLen7_11.csv.csv
+
+    Peptides with variable length: 7-11
+    positive-negative ratio: ~75% pos, ~15% neg
+
+    Contains 132314 samples
+
+Results:
+    Num epochs: 250 / 250
+    Test auc: 0.8983
+
+
+# Note: see note 2 in 'version1_invalid/Description_21|12|21.txt'

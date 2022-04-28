@@ -1,0 +1,10 @@
+Like 'version1/Description_22|3|22.txt', just with all HLA-B data
+
+Data file:
+    mhc_pep_00-05B_NoArtificial_Pep7_11_2labels.csv
+
+Results:
+    Epoch: 129 / 300
+    loss train:  0.0013  |  auc train:  0.9903  |  r2 train:  0.5411
+    loss val:  0.0013    |  auc val:  0.9871    |  r2 val:  0.5543
+    auc test:  0.988  |  r2 test:  0.5384

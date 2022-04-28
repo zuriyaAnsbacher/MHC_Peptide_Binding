@@ -1,0 +1,14 @@
+Like '../HLA-A_CNN/version3/Description_2|2|22.txt'. same hyper-parameters, model details
+
+Data file:
+    all_seq_C.csv (processed)
+    contains 2065 HLA-B sequences
+    processing done by:
+        drop duplicates
+
+
+Results:
+    Epoch: 1000 / 1000
+    test results:
+        Accuracy,1 Mismatch,2 Mismatches,3 Mismatches
+        0.3567708333333333,0.9817708333333334,0.9921875,0.9973958333333334

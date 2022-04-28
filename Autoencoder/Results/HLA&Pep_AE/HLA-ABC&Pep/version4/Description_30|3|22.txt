@@ -1,0 +1,12 @@
+Run model, concat_type=None, on all data of HLA Class I (HLA-A,B,C)
+Hyper-parameters are like in 'HLA-A&Pep/version5_emb_afterNNI/Description_6|3|22.txt'
+
+Data file:
+    'mhc_pep_00-05ABC_NoArtificial_Pep7_11_2labels.csv'
+    same processing as before
+
+Results:
+    Epoch: 218 / 400
+    loss train:  0.0019  |  auc train:  0.9826  |  r2 train:  0.4914
+    loss val:  0.002    |  auc val:  0.9811    |  r2 val:  0.5156
+    auc test:  0.9828  |  r2 test:  0.5174

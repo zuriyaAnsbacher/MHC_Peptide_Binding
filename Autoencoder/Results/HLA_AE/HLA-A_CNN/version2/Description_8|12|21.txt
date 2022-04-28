@@ -1,0 +1,12 @@
+Like 'version1/Description_7|12|21.txt' with the changes:
+
+The 'X' signal was removed from the data processing
+
+encoding dim = 50
+embedding dim = 15
+Encoder.conv2 has nn.MaxPool2d(2) after ReLU
+Encoder.fc1 has nn.Linear(4320, 512) (instead of nn.Linear(8640, 512))
+
+Results:
+    Accuracy,1 Mismatch,2 Mismatches,3 Mismatches
+    0.13777777777777778,0.9311111111111111,0.9866666666666667,0.9955555555555555
