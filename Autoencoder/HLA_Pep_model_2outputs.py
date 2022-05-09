@@ -17,452 +17,446 @@ from Loader import HLAPepDataset_2Labels
 from Sampler import SamplerByLength
 from Plots import plot_loss, plot_auc, plot_r2
 from Utils import get_existing_model, get_hla_oneHot_map, load_model_dict, get_combined_model, \
-    get_dataset_test, evaluate, evaluate_splitScoreByFreqHLA
+    get_dataset_test, get_freq_dict
 
 
-def loss_func_BCE(pred, true):
-    BCE_Logists = F.binary_cross_entropy_with_logits(pred, true)
-    return BCE_Logists
+class ModelWrapper:
+    def __init__(self, params):
+        # ----- configuration -----
+        self.version = params.get("version")
+        self.cuda_num = params.get("cuda", 0)
+        self.device = f'cuda:{self.cuda_num}' if torch.cuda.is_available() else 'cpu'
+        self.run_category = params.get("run_category", "classic")  # classic, test, nni
 
+        # ----- paths -----
+        self.datafile = params.get("datafile")
+        # existing models paths
+        self.HLA_model_path = params.get("HLA_model_path")
+        self.pep_model_path = params.get("pep_model_path")
+        self.combined_model_path = params.get("combined_model_path")
+        # results paths
+        self.res_dir = params.get("res_dir", "Results")
+        self.AE_dir = params.get("AE_dir")
+        self.specific_model_dir = params.get("specific_model_dir")
+        self.res_path = f'{self.res_dir}/{self.AE_dir}/{self.specific_model_dir}/version{self.version}'
+        self.pt_file = params.get("pt_file")
+        if self.run_category == "classic":
+            self.create_paths()
+        # frequencies paths
+        self.freq_dir = params.get("freq_dir")
+        self.freq_file = params.get("freq_file")
 
-def loss_func_MSE(pred, true):
-    MSE = F.mse_loss(pred, true)
-    return MSE
+        # ----- datafile headers -----
+        self.pep_header = params.get("pep_header", "Pep")
+        self.HLA_name_header = params.get("HLA_Name_Header", "HLA name")
+        self.HLA_seq_header = params.get("HLA_seq_header", "HLA Seq")
+        self.binary_header = params.get("binary_binding_header", "Binary binding")
+        self.cont_header = params.get("continuous_binding_header", "Continuous binding")
+        self.flag_header = params.get("flag_header", "Flag")
+        self.headers = [self.pep_header, self.HLA_name_header, self.HLA_seq_header,
+                        self.binary_header, self.cont_header, self.flag_header]
 
+        # ----- concat types -----
+        self.concat_type = params.get("concat_type", "None")
+        self.concat_oneHot_dim = params.get("concat_oneHot_dim", 31)
+        self.concat_emb_dim = params.get("concat_emb_dim", 25)
 
-def train_epoch(model, train_loader, loss_BCE, loss_MSE, optimizer, var, alpha, device):
-    model.train()
-    total_loss = 0
-    preds1, preds2 = [], []
-    trues1, trues2 = [], []
-    flags = []
-    sigmoid = nn.Sigmoid()
+        # ----- flags -----
+        self.split_score_by_freq = params.get("split_score_by_freq", False)
+        self.loss_weighted_by_freq = params.get("loss_weighted_by_freq", False)
+        self.freeze_weight_AEs = params.get("freeze_weight_AEs", False)
+        self.transfer_learning = params.get("transfer_learning", False)
 
-    for batch in train_loader:
-        pep, hla, y1, y2, flag, hla_oneHot, emb = batch  # y1 binary, y2 continuous
-        pep, hla, y1, y2, flag, hla_oneHot, emb = pep.to(device), hla.to(device), y1.to(device), y2.to(device), \
-                                                  flag.to(device), hla_oneHot.to(device), emb.to(device)
+        # ----- hyper-parameters -----
+        self.epochs = params.get("epochs", 400)
+        self.batch_size = params.get("batch_size", 64)
+        self.pep_optional_len = params.get("pep_optional_len", [7, 8, 9, 10, 11])
+        self.optim_params, self.architect_params = self.get_params_for_model_and_optimizer()
+        if self.run_category == 'nni':
+            self.set_nni_params()
 
-        optimizer.zero_grad()
+        # ----- load AES -----
+        self.HLA_model_dict = load_model_dict(self.HLA_model_path, self.cuda_num)
+        self.pep_model_dict = load_model_dict(self.pep_model_path, self.cuda_num)
 
-        pred1, pred2 = model(pep, hla, hla_oneHot, emb)
-        pred1, pred2 = pred1.view(-1), pred2.view(-1)  # squeeze(1)?
+        # ----- for later use -----
+        self.train_loader, self.val_loader, self.test_loader = None, None, None
+        self.optimizer = None
+        self.var = None
 
-        new_pred1 = torch.multiply(pred1, 1 - flag)
-        new_y1 = torch.multiply(y1, 1 - flag)
-        new_pred2 = torch.multiply(pred2, flag)
-        new_y2 = torch.multiply(y2, flag)
+    def create_paths(self):
+        dir1 = self.res_dir
+        dir2 = os.path.join(self.res_dir, self.AE_dir)
+        dir3 = os.path.join(self.res_dir, self.AE_dir, self.specific_model_dir)
+        dir4 = self.res_path
 
-        loss_bce = loss_BCE(new_pred1, new_y1)
-        loss_mse = loss_MSE(new_pred2, new_y2) / var
+        for d in [dir1, dir2, dir3, dir4]:
+            if not os.path.exists(d):
+                os.mkdir(d)
 
-        loss = alpha * loss_bce + (1 - alpha) * loss_mse
-        total_loss += loss.item()
+    def get_params_for_model_and_optimizer(self):
+        """ Best params from NNI """
+        if self.concat_type == 'None':
+            optim_params = {'lr': 1e-3, 'weight_decay': 7e-7, 'alpha': 0.6}
+            if self.transfer_learning:
+                optim_params['lr'] = 1e-4
+            architect_params = {'hidden_size': 128, 'activ_func': nn.ReLU(), 'dropout': 0.2}
+            # if using Att model: hidden_size: 64, activ_func: nn.Tanh(), att_layers: 9
+        elif self.concat_type == 'oneHot':
+            optim_params = {'lr': 1e-3, 'weight_decay': 4e-7, 'alpha': 0.6}
+            architect_params = {'hidden_size': 128, 'activ_func': nn.Tanh(), 'dropout': 0.15}
+        elif self.concat_type == 'emb':
+            optim_params = {'lr': 1e-3, 'weight_decay': 7e-7, 'alpha': 0.6}
+            architect_params = {'hidden_size': 64, 'activ_func': nn.ReLU(), 'dropout': 0.1}
+        elif self.concat_type == 'oneHot&zero':
+            optim_params = {'lr': 1e-3, 'weight_decay': 5e-7, 'alpha': 0.65}
+            architect_params = {'hidden_size': 128, 'activ_func': nn.ReLU(), 'dropout': 0.25}
+        else:
+            raise KeyError("concat_type has to be one from the following: 'None'/'oneHot'/'emb'/'oneHot&zero'")
 
-        loss.backward()
-        optimizer.step()
+        return optim_params, architect_params
 
-        preds1 += sigmoid(pred1).detach().cpu().numpy().tolist()
-        trues1 += y1.tolist()
-        preds2 += pred2.tolist()
-        trues2 += y2.tolist()
-        flags += flag.tolist()
+    def set_nni_params(self):
+        """ Adjust to current nni running """
+        nni_params = nni.get_next_parameter()
+        hidden_size = int(nni_params["hidden_size"])
+        activ_func = nni_params["activ_func"]
+        lr = float(nni_params["lr"])
+        weight_decay = float(nni_params["weight_decay"])
+        dropout = float(nni_params["dropout"])
 
-    preds1 = [preds1[i] for i in range(len(flags)) if flags[i] == 0]
-    trues1 = [trues1[i] for i in range(len(flags)) if flags[i] == 0]
-    preds2 = [preds2[i] for i in range(len(flags)) if flags[i] == 1]
-    trues2 = [trues2[i] for i in range(len(flags)) if flags[i] == 1]
+        activ_map = {'relu': nn.ReLU(), 'leaky': nn.LeakyReLU(), 'elu': nn.ELU(), 'tanh': nn.Tanh()}
+        self.optim_params = {'lr': lr, 'weight_decay': weight_decay, 'alpha': 0.6}
+        self.architect_params = {'hidden_size': hidden_size, 'activ_func': activ_map[activ_func], 'dropout': dropout}
 
-    auc = roc_auc_score(trues1, preds1)
-    r2 = r2_score(trues2, preds2)
-    print("loss train: ", round(total_loss / len(train_loader), 4),
-          " | ", "auc train: ", round(auc, 4), " | ", "r2 train: ", round(r2, 4))
+    def loss_BCE(self, pred, true, weights):
+        """ Binary Cross Entropy loss function. Can be used with weights or not  """
+        if self.loss_weighted_by_freq:
+            BCE_Logists = F.binary_cross_entropy_with_logits(pred, true, weight=weights)
+        else:
+            BCE_Logists = F.binary_cross_entropy_with_logits(pred, true)
+        return BCE_Logists
 
-    return total_loss / len(train_loader), auc, r2
+    def loss_MSE(self, pred, true, weights):
+        """ Mean Square Error loss function. Can be used with weights or not  """
+        if self.loss_weighted_by_freq:
+            MSE = (weights * (pred - true) ** 2).mean()
+        else:
+            MSE = F.mse_loss(pred, true)
+        return MSE
 
+    def split_data(self, x, y):
+        """
+        Split data to train-validation-test in classic case, or train-validation in NNI case.
+        'stratify' done according binary binding (for proportional ratio).
+        Note: hla or peptide could be in some groups (train-val-test) but not as a pair.
+         """
+        if self.run_category == 'classic':
+            x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.2, stratify=y[:, 0])
+            x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=0.15, stratify=y_train[:, 0])
+        elif self.run_category == 'nni':
+            x_train, x_val, y_train, y_val = train_test_split(x, y, test_size=0.2, stratify=y[:, 0])
+            x_test, y_test = None, None
+        else:
+            raise KeyError("run_category has to be 'classic'/'nni' in split_data")
 
-def run_validation(model, val_loader, loss_BCE, loss_MSE, var, alpha, device):
-    model.eval()
-    total_loss = 0
-    preds1, preds2 = [], []
-    trues1, trues2 = [], []
-    flags = []
-    sigmoid = nn.Sigmoid()
+        return x_train, y_train, x_val, y_val, x_test, y_test
 
-    with torch.no_grad():
-        for batch in val_loader:
-            pep, hla, y1, y2, flag, hla_oneHot, emb = batch
-            pep, hla, y1, y2, flag, hla_oneHot, emb = pep.to(device), hla.to(device), y1.to(device), y2.to(device), \
-                                                      flag.to(device), hla_oneHot.to(device), emb.to(device)
+    def calculate_var(self, train):
+        """ Calculate the variance of log continuous train values. Used for continuous loss (divided by var) """
+        cont_values = train[train[self.flag_header] == 1][self.cont_header]
+        self.var = np.log(cont_values.astype(float), where=cont_values != 0).var()
+
+    def create_dataLoaders(self, x_train, y_train, x_val, y_val, x_test, y_test):
+        """ Create Data Loaders from dataframes """
+        headers = self.headers
+        bucket_boundaries = [20 * i for i in self.pep_optional_len]  # 20 is encoding_dim of pep on its AE
+
+        hla_oneHotMap = get_hla_oneHot_map(os.path.join(self.freq_dir, self.freq_file),
+                                           n_rows=self.concat_oneHot_dim)  # n most common
+        freq_dict = get_freq_dict(self.freq_dir)
+
+        def np2df(_x, _y): return pd.DataFrame(np.concatenate((_x, _y), axis=1), columns=headers)
+
+        def df2dataset(_df): return HLAPepDataset_2Labels(_df, headers, hla_oneHotMap, freq_dict,
+                                                          self.HLA_model_dict["amino_pos_to_num"], self.concat_type)
+
+        def createSampler(_data): return SamplerByLength(_data, bucket_boundaries, self.batch_size)  #todo: too long. try to make it more efficient
+
+        # batch_size = 1 and no shuffle because the batches were organized in sampler
+        def createLoader(_data, _sampler): return DataLoader(_data, batch_size=1, batch_sampler=_sampler,
+                                                             collate_fn=_data.collate)
+
+        train = np2df(x_train, y_train)
+        val = np2df(x_val, y_val)
+
+        self.calculate_var(train)
+
+        train_data = df2dataset(train)
+        val_data = df2dataset(val)
+
+        train_sampler = createSampler(train_data)
+        val_sampler = createSampler(val_data)
+
+        self.train_loader = createLoader(train_data, train_sampler)
+        self.val_loader = createLoader(val_data, val_sampler)
+
+        if x_test is not None:
+            test = np2df(x_test, y_test)
+            test_data = df2dataset(test)
+            test_sampler = createSampler(test_data)
+            self.test_loader = createLoader(test_data, test_sampler)
+
+    def processing(self):
+        """ Process data """
+        print('Loading data ...')
+        data = pd.read_csv(self.datafile)
+
+        if self.run_category != 'test':
+            def reShape(header): return data[header].values.reshape(-1, 1)
+
+            x = np.concatenate((reShape(self.pep_header), reShape(self.HLA_name_header),
+                                reShape(self.HLA_seq_header)), axis=1)
+            y = np.concatenate((reShape(self.binary_header), reShape(self.cont_header),
+                                reShape(self.flag_header)), axis=1)
+
+            x_train, y_train, x_val, y_val, x_test, y_test = self.split_data(x, y)
+            self.create_dataLoaders(x_train, y_train, x_val, y_val, x_test, y_test)
+        else:
+            freq_dict = get_freq_dict(self.freq_dir)
+            dataset = get_dataset_test(data, self.headers, os.path.join(self.freq_dir, self.freq_file),
+                                       freq_dict, self.HLA_model_dict, self.concat_oneHot_dim, self.concat_type)
+            self.test_loader = DataLoader(dataset, batch_size=1, collate_fn=dataset.collate, shuffle=False)
+
+        print('Loading finished ... ')
+
+    def get_dataloader(self, group):
+        if group == 'train':
+            return self.train_loader
+        elif group == 'val':
+            return self.val_loader
+        elif group == 'test':
+            return self.test_loader
+        else:
+            raise KeyError("'group' has to be one of the following: 'train'/'val'/'test'")
+
+    def predict(self, model, group):
+        total_loss = 0
+        preds1, preds2 = [], []
+        trues1, trues2 = [], []
+        flags = []
+        freqs = []
+        sigmoid = nn.Sigmoid()
+        device = self.device
+        alpha = self.optim_params['alpha']
+        dataloader = self.get_dataloader(group)
+
+        for batch in dataloader:
+            pep, hla, y1, y2, flag, freq2loss, hla_oneHot, emb = batch  # y1 binary, y2 continuous
+            pep, hla, y1, y2, flag, freq2loss, hla_oneHot, emb = pep.to(device), hla.to(device), y1.to(device), \
+                                                                 y2.to(device), flag.to(device), freq2loss.to(device), \
+                                                                 hla_oneHot.to(device), emb.to(device)
+            if group == 'train':
+                self.optimizer.zero_grad()
 
             pred1, pred2 = model(pep, hla, hla_oneHot, emb)
-            pred1, pred2 = pred1.view(-1), pred2.view(-1)  # squeeze(1)?
+            pred1, pred2 = pred1.view(-1), pred2.view(-1)
 
-            new_pred1 = torch.multiply(pred1, 1 - flag)
-            new_y1 = torch.multiply(y1, 1 - flag)
-            new_pred2 = torch.multiply(pred2, flag)
-            new_y2 = torch.multiply(y2, flag)
+            if group != 'test':
+                new_pred1 = torch.multiply(pred1, 1 - flag)
+                new_y1 = torch.multiply(y1, 1 - flag)
+                new_pred2 = torch.multiply(pred2, flag)
+                new_y2 = torch.multiply(y2, flag)
 
-            loss_bce = loss_BCE(new_pred1, new_y1)
-            loss_mse = loss_MSE(new_pred2, new_y2) / var
+                loss_bce = self.loss_BCE(new_pred1, new_y1, weights=freq2loss)
+                loss_mse = self.loss_MSE(new_pred2, new_y2, weights=freq2loss) / self.var
 
-            loss = alpha * loss_bce + (1 - alpha) * loss_mse
-            total_loss += loss.item()
+                loss = alpha * loss_bce + (1 - alpha) * loss_mse
+                total_loss += loss.item()
+
+            if group == 'train':
+                loss.backward()
+                self.optimizer.step()
 
             preds1 += sigmoid(pred1).detach().cpu().numpy().tolist()
             trues1 += y1.tolist()
             preds2 += pred2.tolist()
             trues2 += y2.tolist()
             flags += flag.tolist()
+            freqs += freq2loss.tolist()
 
-    preds1 = [preds1[i] for i in range(len(flags)) if flags[i] == 0]
-    trues1 = [trues1[i] for i in range(len(flags)) if flags[i] == 0]
-    preds2 = [preds2[i] for i in range(len(flags)) if flags[i] == 1]
-    trues2 = [trues2[i] for i in range(len(flags)) if flags[i] == 1]
+        return total_loss, preds1, trues1, preds2, trues2, flags, freqs
 
-    auc = roc_auc_score(trues1, preds1)
-    r2 = r2_score(trues2, preds2)
-    print("loss val: ", round(total_loss / len(val_loader), 4),
-          "   | ", "auc val: ", round(auc, 4), "   | ", "r2 val: ", round(r2, 4))
+    @staticmethod
+    def get_scores(preds1, trues1, preds2, trues2, flags):
+        preds1 = [preds1[i] for i in range(len(flags)) if flags[i] == 0]
+        trues1 = [trues1[i] for i in range(len(flags)) if flags[i] == 0]
+        preds2 = [preds2[i] for i in range(len(flags)) if flags[i] == 1]
+        trues2 = [trues2[i] for i in range(len(flags)) if flags[i] == 1]
 
-    return total_loss / len(val_loader), auc, r2
+        auc = roc_auc_score(trues1, preds1)
+        r2 = r2_score(trues2, preds2)
 
+        print(f'AUC: {"%.4f" % round(auc, 4)} | R2: {"%.4f" % round(r2, 4)}')
+        return auc, r2
 
-def run_model(train_loader, val_loader, Pep_model_dict, HLA_model_dict, concat_type, concat_oneHot_dim, concat_emb_dim,
-              freeze_weight_AEs, optim_params, model_params, epochs, var, device, early_stopping, is_nni=False):
-    pep_model = get_existing_model(Pep_model_dict, model_name='pep')
-    hla_model = get_existing_model(HLA_model_dict, model_name='hla')
+    @staticmethod
+    def get_scores_by_freq(preds1, trues1, preds2, trues2, flags, freqs):
+        threshold = [(3001, 150000), (101, 3000), (1, 100)]  # todo: check the thresholds!
+        # freqs are sqrt(1/real_freq), and reverse the order because 1/val
+        threshold = [(np.sqrt(1 / y), np.sqrt(1 / x)) for (x, y) in threshold]
+        # threshold = [(1, 0.1), (0.1, 0.22), (0.221, 0)]
+        auc_high, r2_high = 0, 0
 
-    # freeze weights of AEs
-    if freeze_weight_AEs:
-        for param in pep_model.parameters():
-            param.requires_grad = False
-        for param in hla_model.parameters():
-            param.requires_grad = False
+        for case, thr in zip(['high', 'med ', 'low '], threshold):
+            _preds1 = [preds1[i] for i in range(len(flags)) if (flags[i] == 0 and thr[0] < freqs[i] <= thr[1])]
+            _trues1 = [trues1[i] for i in range(len(flags)) if (flags[i] == 0 and thr[0] < freqs[i] <= thr[1])]
+            _preds2 = [preds2[i] for i in range(len(flags)) if (flags[i] == 1 and thr[0] < freqs[i] <= thr[1])]
+            _trues2 = [trues2[i] for i in range(len(flags)) if (flags[i] == 1 and thr[0] < freqs[i] <= thr[1])]
 
-    model = HLA_Pep_Model(Pep_model_dict['encoding_dim'], HLA_model_dict['encoding_dim'],
-                          pep_model, hla_model, concat_type, concat_oneHot_dim, concat_emb_dim, model_params)
-    model.to(device)
-    loss_BCE = loss_func_BCE
-    loss_MSE = loss_func_MSE
-    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()),
-                           lr=optim_params['lr'],  weight_decay=optim_params['weight_decay'])
-    alpha = optim_params['alpha']
-    train_loss_list = []
-    val_loss_list = []
-    train_auc_list = []
-    val_auc_list = []
-    train_r2_list = []
-    val_r2_list = []
-    min_loss = float('inf')
-    max_auc = 0
-    counter = 0
-    best_model = 'None'
+            auc = roc_auc_score(_trues1, _preds1)
+            r2 = r2_score(_trues2, _preds2)
+            print(f'Case: {case}. AUC: {"%.4f" % round(auc, 4)} | R2: {"%.4f" % round(r2, 4)}')
+            if case == 'high':
+                auc_high, r2_high = auc, r2
 
-    for epoch in range(1, epochs + 1):
-        print(f'Epoch: {epoch} / {epochs}')
-        train_loss, train_auc, train_r2 = \
-            train_epoch(model, train_loader, loss_BCE, loss_MSE, optimizer, var, alpha, device)
-        train_loss_list.append(train_loss)
-        train_auc_list.append(train_auc)
-        train_r2_list.append(train_r2)
-        val_loss, val_auc, val_r2 = \
-            run_validation(model, val_loader, loss_BCE, loss_MSE, var, alpha, device)
-        val_loss_list.append(val_loss)
-        val_auc_list.append(val_auc)
-        val_r2_list.append(val_r2)
+        return auc_high, r2_high
 
-        if val_loss < min_loss:
-            min_loss = val_loss
-            counter = 0
-            best_model = copy.deepcopy(model)
-        elif early_stopping and counter == 30:
-            break
+    def train_epoch(self, model):
+        model.train()
+        print('Train')
+        total_loss, preds1, trues1, preds2, trues2, flags, freqs = self.predict(model, group='train')
+        print(f'loss: {round(total_loss / len(self.train_loader), 7)}')
+
+        if self.split_score_by_freq:
+            auc, r2 = self.get_scores_by_freq(preds1, trues1, preds2, trues2, flags, freqs)
         else:
-            counter += 1
+            auc, r2 = self.get_scores(preds1, trues1, preds2, trues2, flags)
 
-        if min(train_auc, val_auc) > max_auc:
-            max_auc = min(train_auc, val_auc)
+        return total_loss / len(self.train_loader), auc, r2
 
-        if is_nni:
-            nni.report_intermediate_result(max_auc)
+    def validation_epoch(self, model):
+        model.eval()
+        print('Validation')
+        with torch.no_grad():
+            total_loss, preds1, trues1, preds2, trues2, flags, freqs = self.predict(model, group='val')
+            print(f'loss: {round(total_loss / len(self.val_loader), 7)}')
 
-    if is_nni:
-        nni.report_final_result(max_auc)
+        if self.split_score_by_freq:
+            auc, r2 = self.get_scores_by_freq(preds1, trues1, preds2, trues2, flags, freqs)
+        else:
+            auc, r2 = self.get_scores(preds1, trues1, preds2, trues2, flags)
 
-    # check if need return epoch - 1
-    return best_model, train_loss_list, val_loss_list, train_auc_list, val_auc_list, train_r2_list, val_r2_list, epoch
+        return total_loss / len(self.val_loader), auc, r2
 
+    def evaluate(self, model):
+        model.eval()
+        print('Test')
+        with torch.no_grad():
+            _, preds1, trues1, preds2, trues2, flags, freqs = self.predict(model, group='test')
 
-def main(parameters):
-    root = parameters["root"]
-    datafile = parameters["datafile"]
-    version = parameters["version"]
-    HLA_Model_path = parameters["HLA_Model_path"]
-    Pep_Model_path = parameters["Pep_Model_path"]
-    hla_freq_path = parameters["HLA_Freqs_path"]
+        if self.split_score_by_freq:
+            _, _ = self.get_scores_by_freq(preds1, trues1, preds2, trues2, flags, freqs)
+        else:
+            _, _ = self.get_scores(preds1, trues1, preds2, trues2, flags)
 
-    save_path = root + '_CNN_LSTM_FC_Results'
-    save_dir = f'{save_path}/CNN_LSTM_FC_version{version}'
+    def create_plots(self, train_loss_list, val_loss_list, train_auc_list, val_auc_list,
+                     train_r2_list, val_r2_list, epochs_num):
+        plot_loss(train_loss_list, val_loss_list, epochs_num, self.res_path)
+        plot_auc(train_auc_list, val_auc_list, epochs_num, self.res_path)
+        plot_r2(train_r2_list, val_r2_list, epochs_num, self.res_path)
 
-    if not os.path.exists(save_path):
-        os.mkdir(save_path)
+    def run_test(self):
+        pep_model = get_existing_model(self.pep_model_dict, model_name='pep')
+        hla_model = get_existing_model(self.HLA_model_dict, model_name='hla', is_test=True)
+        combined_model_dict = load_model_dict(self.combined_model_path, self.cuda_num)
+        model = get_combined_model(hla_model, self.HLA_model_dict, pep_model, self.pep_model_dict,
+                                   combined_model_dict, self.architect_params, self.concat_type)
+        model.to(self.device)
+        self.evaluate(model)
 
-    if not os.path.exists(save_dir):
-        os.mkdir(save_dir)
+    def save_model(self, model):
+        torch.save({  # todo: add more fields?
+            "batch_size": self.batch_size,
+            "model_state_dict": model.state_dict()
+        }, f'{os.path.join(self.res_path, self.pt_file)}')
 
-    Pep_Header = parameters["Pep_Header"]
-    HLA_Seq_Header = parameters["HLA_Seq_Header"]
-    HLA_Name_Header = parameters["HLA_Name_Header"]
-    Binary_Header = parameters["Binary_Binding_Header"]
-    Cont_Header = parameters["Continuous_Binding_Header"]
-    Flag_Header = parameters["Flag_Header"]
+    def run_model(self):
+        pep_model = get_existing_model(self.pep_model_dict, model_name='pep')
+        hla_model = get_existing_model(self.HLA_model_dict, model_name='hla')
 
-    cuda_num = parameters["CUDA"]
-    epochs = parameters["Epochs"]
-    batch_size = parameters["Batch_size"]
-    pep_optional_len = parameters["Pep_optional_len"]
-    concat_type = parameters["Concat_type"]
-    concat_oneHot_dim = parameters["Concat_oneHot_dim"]
-    concat_emb_dim = parameters["Concat_emb_dim"]
-    split_score_by_freq = parameters["Split_score_by_freq"]
-    freeze_weight_AEs = parameters["Freeze_weight_AEs"]
+        if self.freeze_weight_AEs:
+            for param in list(pep_model.parameters()) + list(hla_model.parameters()):
+                param.requires_grad = False
 
-    saved_model_file = parameters["Saved_model_file"]
+        if self.transfer_learning:
+            combined_model_dict = load_model_dict(self.combined_model_path, self.cuda_num)
+            model = get_combined_model(hla_model, self.HLA_model_dict, pep_model, self.pep_model_dict,
+                                       combined_model_dict, self.architect_params, self.concat_type)
+        else:
+            model = HLA_Pep_Model(self.pep_model_dict['encoding_dim'], self.HLA_model_dict['encoding_dim'],
+                                  pep_model, hla_model, self.concat_type, self.concat_oneHot_dim,
+                                  self.concat_emb_dim, self.architect_params)
 
-    if concat_type not in ['oneHot', 'emb', 'None', 'oneHot&zero']:
-        print('Error: concat_type has to be "oneHot"/"emb"/"None"/"oneHot&zero" only')
-        return
+        model.to(self.device)
+        self.optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()),
+                                    lr=self.optim_params['lr'], weight_decay=self.optim_params['weight_decay'])
 
-    # best params from NNI
-    if concat_type == 'None':
-        optim_params = {'lr': 1e-3, 'weight_decay': 7e-7, 'alpha': 0.6}
-        model_params = {'hidden_size': 128, 'activ_func': nn.ReLU(), 'dropout': 0.2}
-    elif concat_type == 'oneHot':
-        optim_params = {'lr': 1e-3, 'weight_decay': 4e-7, 'alpha': 0.6}
-        model_params = {'hidden_size': 128, 'activ_func': nn.Tanh(), 'dropout': 0.15}
-    elif concat_type == 'emb':
-        optim_params = {'lr': 1e-3, 'weight_decay': 7e-7, 'alpha': 0.6}
-        model_params = {'hidden_size': 64, 'activ_func': nn.ReLU(), 'dropout': 0.1}
-    elif concat_type == 'oneHot&zero':
-        optim_params = {'lr': 1e-3, 'weight_decay': 5e-7, 'alpha': 0.65}
-        model_params = {'hidden_size': 128, 'activ_func': nn.ReLU(), 'dropout': 0.25}
+        train_loss_list, val_loss_list = [], []
+        train_auc_list, val_auc_list = [], []
+        train_r2_list, val_r2_list = [], []
+        min_loss = float('inf')
+        max_auc = 0
+        counter = 0
+        best_model = 'None'
 
-    HLA_model_dict = load_model_dict(HLA_Model_path)
-    Pep_model_dict = load_model_dict(Pep_Model_path)
+        for epoch in range(1, self.epochs + 1):
+            print(f'Epoch: {epoch} / {self.epochs}')
+            train_loss, train_auc, train_r2 = self.train_epoch(model)
+            val_loss, val_auc, val_r2 = self.validation_epoch(model)
 
-    print('loading data')
-    data = pd.read_csv(datafile)
+            lists = [train_loss_list, train_auc_list, train_r2_list, val_loss_list, val_auc_list, val_r2_list]
+            values = [train_loss, train_auc, train_r2, val_loss, val_auc, val_r2]
+            for lst, val in zip(lists, values):
+                lst.append(val)
 
-    x = np.concatenate((data[Pep_Header].values.reshape(-1, 1),
-                        data[HLA_Name_Header].values.reshape(-1, 1),
-                        data[HLA_Seq_Header].values.reshape(-1, 1)), axis=1)
-    y = np.concatenate((data[Binary_Header].values.reshape(-1, 1),
-                        data[Cont_Header].values.reshape(-1, 1),
-                        data[Flag_Header].values.reshape(-1, 1)), axis=1)
+            # early stopping, max_counter = 30
+            if val_loss < min_loss:
+                min_loss = val_loss
+                counter = 0
+                best_model = copy.deepcopy(model)
+            elif counter == 30:
+                break
+            else:
+                counter += 1
 
-    # hla or pep could be in some groups (train-val-test) but not as a pair
-    # stratify by Binary
-    x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.2, stratify=y[:, 0])  # I added seed (for comparison)
-    x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=0.15, stratify=y_train[:, 0]) # I added seed (for comparison)
+            if min(train_auc, val_auc) > max_auc:
+                max_auc = min(train_auc, val_auc)
 
-    headers = [Pep_Header, HLA_Name_Header, HLA_Seq_Header, Binary_Header, Cont_Header, Flag_Header]
-    train = pd.DataFrame(np.concatenate((x_train, y_train), axis=1), columns=headers)
-    val = pd.DataFrame(np.concatenate((x_val, y_val), axis=1), columns=headers)
-    test = pd.DataFrame(np.concatenate((x_test, y_test), axis=1), columns=headers)
+            if self.run_category == 'nni':
+                nni.report_intermediate_result(max_auc)
 
-    cont_values = train[train[Flag_Header] == 1][Cont_Header]
-    var = np.log(cont_values.astype(float), where=cont_values != 0).var()  # variance of log continuous train values
-    hla_oneHotMap = get_hla_oneHot_map(hla_freq_path,  n_rows=concat_oneHot_dim)  # 31 most common
+        if self.run_category == 'nni':
+            nni.report_final_result(max_auc)
 
-    train_data = HLAPepDataset_2Labels(train, headers, hla_oneHotMap, HLA_model_dict["amino_pos_to_num"])
-    val_data = HLAPepDataset_2Labels(val, headers, hla_oneHotMap, HLA_model_dict["amino_pos_to_num"])
-    test_data = HLAPepDataset_2Labels(test, headers, hla_oneHotMap, HLA_model_dict["amino_pos_to_num"])
-
-    bucket_boundaries = [20 * i for i in pep_optional_len]
-    train_sampler = SamplerByLength(train_data, bucket_boundaries, batch_size)
-    val_sampler = SamplerByLength(val_data, bucket_boundaries, batch_size)
-    test_sampler = SamplerByLength(test_data, bucket_boundaries, batch_size)
-
-    # batch_size = 1 and no shuffle because the batches were organized in sampler
-    train_loader = DataLoader(train_data, batch_size=1, batch_sampler=train_sampler, collate_fn=train_data.collate)
-    val_loader = DataLoader(val_data, batch_size=1, batch_sampler=val_sampler, collate_fn=val_data.collate)
-    test_loader = DataLoader(test_data, batch_size=1, batch_sampler=test_sampler, collate_fn=test_data.collate)
-
-    print('finished loading')
-
-    device = f'cuda:{cuda_num}' if torch.cuda.is_available() else 'cpu'
-    model, train_loss_list, val_loss_list, train_auc_list, val_auc_list, train_r2_list, val_r2_list, num_epochs = \
-        run_model(train_loader, val_loader, Pep_model_dict, HLA_model_dict, concat_type=concat_type,
-                  concat_oneHot_dim=concat_oneHot_dim, concat_emb_dim=concat_emb_dim,
-                  freeze_weight_AEs=freeze_weight_AEs, optim_params=optim_params, model_params=model_params,
-                  epochs=epochs, var=var, device=device, early_stopping=True)
-
-    plot_loss(train_loss_list, val_loss_list, num_epochs, save_dir)
-    plot_auc(train_auc_list, val_auc_list, num_epochs, save_dir)
-    plot_r2(train_r2_list, val_r2_list, num_epochs, save_dir)
-
-    if split_score_by_freq:
-        evaluate_splitScoreByFreqHLA(model, test_loader, test, test_sampler, batch_size, device)
-    else:
-        evaluate(model, test_loader, device)
-
-    torch.save({
-        'batch_size': batch_size,
-        'model_state_dict': model.state_dict()
-    }, f'{save_dir}/{saved_model_file}')
-
-
-def main_nni(stable_params):
-    datafile = stable_params["datafile"]
-    HLA_Model_path = stable_params["HLA_Model_path"]
-    Pep_Model_path = stable_params["Pep_Model_path"]
-    hla_freq_path = stable_params["HLA_Freqs_path"]
-
-    Pep_Header = stable_params["Pep_Header"]
-    HLA_Seq_Header = stable_params["HLA_Seq_Header"]
-    HLA_Name_Header = stable_params["HLA_Name_Header"]
-    Binary_Header = stable_params["Binary_Binding_Header"]
-    Cont_Header = stable_params["Continuous_Binding_Header"]
-    Flag_Header = stable_params["Flag_Header"]
-
-    cuda_num = stable_params["CUDA"]
-    epochs = stable_params["Epochs"]
-    batch_size = stable_params["Batch_size"]
-    pep_optional_len = stable_params["Pep_optional_len"]
-    concat_type = stable_params["Concat_type"]
-    concat_oneHot_dim = stable_params["Concat_oneHot_dim"]
-    freeze_weight_AEs = stable_params["Freeze_weight_AEs"]
-
-    nni_params = nni.get_next_parameter()
-    lr = nni_params["lr"]
-    weight_decay = nni_params["weight_decay"]
-    hidden_size = nni_params["hidden_size"]
-    activ_func = nni_params["activ_func"]
-    dropout = nni_params["dropout"]
-
-    if concat_type == 'emb':
-        concat_emb_dim = nni_params["Concat_emb_dim"]
-    else:
-        concat_emb_dim = 20
-
-    activ_map = {'relu': nn.ReLU(), 'elu': nn.ELU(), 'tanh': nn.Tanh()}
-
-    optim_params = {'lr': lr, 'weight_decay': weight_decay}
-    model_params = {'hidden_size': hidden_size, 'activ_func': activ_map[activ_func], 'dropout': dropout}
-
-    if concat_type not in ['oneHot', 'emb', 'None', 'oneHot&zero']:
-        print('Error: concat_type has to be "oneHot"/"emb"/"None"/"oneHot&zero" only')
-        return
-
-    HLA_model_dict = load_model_dict(HLA_Model_path)
-    Pep_model_dict = load_model_dict(Pep_Model_path)
-
-    print('loading data')
-    data = pd.read_csv(datafile)
-
-    x = np.concatenate((data[Pep_Header].values.reshape(-1, 1),
-                        data[HLA_Name_Header].values.reshape(-1, 1),
-                        data[HLA_Seq_Header].values.reshape(-1, 1)), axis=1)
-    y = np.concatenate((data[Binary_Header].values.reshape(-1, 1),
-                        data[Cont_Header].values.reshape(-1, 1),
-                        data[Flag_Header].values.reshape(-1, 1)), axis=1)
-
-    # hla or pep could be in some groups (train-val-test) but not as a pair
-    # stratify by Flag (binary/continuous)
-    x_train, x_val, y_train, y_val = train_test_split(x, y, test_size=0.2, stratify=y[:, 2])
-
-    headers = [Pep_Header, HLA_Name_Header, HLA_Seq_Header, Binary_Header, Cont_Header, Flag_Header]
-    train = pd.DataFrame(np.concatenate((x_train, y_train), axis=1), columns=headers)
-    val = pd.DataFrame(np.concatenate((x_val, y_val), axis=1), columns=headers)
-
-    cont_values = train[train[Flag_Header] == 1][Cont_Header]
-    var = np.log(cont_values.astype(float), where=cont_values != 0).var()  # variance of log continuous train values
-    hla_oneHotMap = get_hla_oneHot_map(hla_freq_path, n_rows=concat_oneHot_dim)  # 30 most common
-
-    train_data = HLAPepDataset_2Labels(train, headers, hla_oneHotMap, HLA_model_dict["amino_pos_to_num"])
-    val_data = HLAPepDataset_2Labels(val, headers, hla_oneHotMap, HLA_model_dict["amino_pos_to_num"])
-
-    bucket_boundaries = [20 * i for i in pep_optional_len]
-    train_sampler = SamplerByLength(train_data, bucket_boundaries, batch_size)
-    val_sampler = SamplerByLength(val_data, bucket_boundaries, batch_size)
-
-    # batch_size = 1 and no shuffle because the batches were organized in sampler
-    train_loader = DataLoader(train_data, batch_size=1, batch_sampler=train_sampler, collate_fn=train_data.collate)
-    val_loader = DataLoader(val_data, batch_size=1, batch_sampler=val_sampler, collate_fn=val_data.collate)
-
-    print('finished loading')
-
-    device = f'cuda:{cuda_num}' if torch.cuda.is_available() else 'cpu'
-    _, _, _, _, _, _, _, _ = run_model(train_loader, val_loader, Pep_model_dict, HLA_model_dict,
-                                       concat_type=concat_type, concat_oneHot_dim=concat_oneHot_dim,
-                                       concat_emb_dim=concat_emb_dim, freeze_weight_AEs=freeze_weight_AEs,
-                                       optim_params=optim_params, model_params=model_params,
-                                       epochs=epochs, var=var, device=device, early_stopping=True,
-                                       is_nni=True)
-
-
-def main_test_on_trained_model(params):
-    input_file = f'../Data/IEDB_processed/MHC_and_Pep/mhc_pep01A_701NegNoArtificial_Pep7_11_2labels.csv'
-
-    concat_type = params['Concat_type']
-    if concat_type == 'None':
-        best_params = {'hidden_size': 128, 'activ_func': nn.ReLU(), 'dropout': 0.2}
-    elif concat_type == 'oneHot':
-        best_params = {'hidden_size': 128, 'activ_func': nn.Tanh(), 'dropout': 0.15}
-    elif concat_type == 'emb':
-        best_params = {'hidden_size': 64, 'activ_func': nn.ReLU(), 'dropout': 0.1, 'concat_emb_dim': 25}
-    elif concat_type == 'oneHot&zero':
-        best_params = {'hidden_size': 128, 'activ_func': nn.ReLU(), 'dropout': 0.25}
-
-    dir_model = f'CNN_LSTM_FC_version8_{concat_type}BestParamsNNI'
-    file_model = f'model_best_params_nni_concat{concat_type}.pt'
-    combined_model_path = f'HLA_Pep_CNN_LSTM_FC_Results/{dir_model}/{file_model}'
-
-    hla_model_path = params["HLA_Model_path"]
-    pep_model_path = params["Pep_Model_path"]
-    hla_freq_path = params['HLA_Freqs_path']
-
-    concat_oneHot_dim = params["Concat_oneHot_dim"]
-    Pep_Header = params["Pep_Header"]
-    HLA_Seq_Header = params["HLA_Seq_Header"]
-    HLA_Name_Header = params["HLA_Name_Header"]
-    Binary_Header = params["Binary_Binding_Header"]
-    Cont_Header = params["Continuous_Binding_Header"]
-    Flag_Header = params["Flag_Header"]
-    Headers = [Pep_Header, HLA_Name_Header, HLA_Seq_Header, Binary_Header, Cont_Header, Flag_Header]
-
-    device = f'cuda:{params["CUDA"]}' if torch.cuda.is_available() else 'cpu'
-
-    pep_model_dict = load_model_dict(pep_model_path)
-    hla_model_dict = load_model_dict(hla_model_path)
-    combined_model_dict = load_model_dict(combined_model_path)
-
-    pep_model = get_existing_model(pep_model_dict, model_name='pep')
-    hla_model = get_existing_model(hla_model_dict, model_name='hla', is_test=True)
-
-    model = get_combined_model(hla_model, hla_model_dict, pep_model, pep_model_dict,
-                               combined_model_dict, best_params, concat_type=concat_type)
-    model.to(device)
-
-    df = pd.read_csv(input_file)
-    dataset = get_dataset_test(df, Headers, hla_freq_path, hla_model_dict, concat_oneHot_dim)
-    test_loader = DataLoader(dataset, batch_size=1, collate_fn=dataset.collate, shuffle=False)
-    evaluate(model, test_loader, device)
+        if self.run_category == 'classic':
+            # check if need epoch - 1
+            self.create_plots(train_loss_list, val_loss_list, train_auc_list, val_auc_list,
+                              train_r2_list, val_r2_list, epoch)
+        return best_model
 
 
 if __name__ == '__main__':
     with open('Parameters/HLA_Pep_parameters.json') as f:
         PARAMETERS = json.load(f)
+    model_wrapper = ModelWrapper(PARAMETERS)
+    model_wrapper.processing()
 
-    if PARAMETERS['IS_TEST']:
-        main_test_on_trained_model(PARAMETERS)
-
-    else:
-        if not PARAMETERS['IS_NNI']:
-            main(PARAMETERS)
-        else:
-            main_nni(PARAMETERS)
-
-
-
+    if model_wrapper.run_category == 'classic':
+        BEST_MODEL = model_wrapper.run_model()
+        model_wrapper.evaluate(BEST_MODEL)
+        model_wrapper.save_model(BEST_MODEL)
+    elif model_wrapper.run_category == 'nni':
+        _ = model_wrapper.run_model()
+    elif model_wrapper.run_category == 'test':
+        model_wrapper.run_test()
