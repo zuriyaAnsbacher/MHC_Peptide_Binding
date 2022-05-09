@@ -63,7 +63,7 @@ class HLAPepDataset(Dataset):
 
 
 class HLAPepDataset_2Labels(Dataset):
-    def __init__(self, data, headers, hla_oneHot, amino_pos_to_num, concat_type):
+    def __init__(self, data, headers, hla_oneHot, freq_dict, amino_pos_to_num, concat_type):
         self.data = data  # DataFrame
 
         pep_header, hla_name_header, hla_seq_header, binary_header, cont_header, flag_header = headers
@@ -74,6 +74,7 @@ class HLAPepDataset_2Labels(Dataset):
         self.cont_header = cont_header
         self.flag_header = flag_header
         self.concat_type = concat_type
+        self.freq_dict = freq_dict
 
         self.amino_pos_to_num = amino_pos_to_num
         self.amino_acids = [letter for letter in 'ARNDCEQGHILKMFPSTWYV']
@@ -98,8 +99,9 @@ class HLAPepDataset_2Labels(Dataset):
         pep = self.convert_to_one_hot(pep, seq_type='pep')
         continuous = np.log(float(continuous) + 1/np.e) if (flag == 1) else continuous # epsilon=1/e (for log(0+eps)=-1)
         hla_oneHot = self.convert_to_one_hot(hla_name, seq_type='hla') if self.concat_type != 'None' else 0
+        freq2loss = float(self.freq_dict[hla_name])
 
-        sample = (pep, hla, binary, continuous, flag, hla_oneHot)
+        sample = (pep, hla, binary, continuous, flag, hla_oneHot, freq2loss)
         return sample
 
     def get_oneHot_map_pep(self):
@@ -148,13 +150,14 @@ class HLAPepDataset_2Labels(Dataset):
         return [to_scalar(item) for item in oneHot_lst]
 
     def collate(self, batch):
-        pep, hla, binary, continuous, flag, hla_oneHot = zip(*batch)
+        pep, hla, binary, continuous, flag, hla_oneHot, freq2loss = zip(*batch)
         lst = list()
         lst.append(torch.Tensor(pep))
         lst.append(torch.Tensor(hla))
         lst.append(torch.Tensor(binary))
         lst.append(torch.Tensor(continuous))
         lst.append(torch.Tensor(flag))
+        lst.append(torch.Tensor(freq2loss))
         lst.append(torch.Tensor(hla_oneHot))
         if self.concat_type != 'None':
             lst.append(torch.Tensor(self.oneHot_to_scalar(hla_oneHot)))
