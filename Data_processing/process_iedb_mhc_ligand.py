@@ -79,17 +79,18 @@ def clear_and_extract_data(df, labels_num):
     return new_df
 
 
-def pep_valid(df):
+def pep_valid(df, mhc_class):
     # 'OVYLVMEL + OX(6M)' -> 'OVYLVMEL' (for remove peptides like this, use 'remove_invalid_pep()')
     df[PEP_HEAD] = pd.DataFrame(df[PEP_HEAD]).applymap(lambda x: x.split()[0])
     # df = df[df['Pep'].apply(lambda x: x.split()[0])]
 
-    # remove peptide with len < threshold_min or len > threshold_max
-    threshold_min = 7
-    threshold_max = 11
-    df = df[df[PEP_HEAD].apply(lambda x: threshold_min <= len(x) <= threshold_max)]
+    if mhc_class == 'I':  # in class II, do not cut by threshold
+        # remove peptide with len < threshold_min or len > threshold_max
+        threshold_min = 7
+        threshold_max = 11
+        df = df[df[PEP_HEAD].apply(lambda x: threshold_min <= len(x) <= threshold_max)]
 
-    # remove peptides which contains characters that are not amino acids letters
+    # remove peptides which contain characters that are not amino acids letters
     amino_acids = [letter for letter in 'ARNDCEQGHILKMFPSTWYV']
 
     def valid_pep(col):
@@ -107,14 +108,16 @@ def drop_nan(df):
     return df
 
 
-def split_to_classes(df, only1allele):  # classI, classII, and data with '/' (2 options for HLA, only in classII)
+def split_to_classes(df, only1allele, digits=None):  # classI, classII, and data with '/' (2 options for HLA, only in classII)
     df_slash = df[df[HLA_NAME_HEAD].str.contains("/")]
     df_classI = df[df[HLA_NAME_HEAD].str.contains('A\*|B\*|C\*') & ~df[HLA_NAME_HEAD].str.contains("/")]
+    df_classII = df[df[HLA_NAME_HEAD].str.contains('DR|DQ|DP') & ~df[HLA_NAME_HEAD].str.contains("/")]
 
     if only1allele:
         df_classI = df_classI[df_classI[HLA_NAME_HEAD].str.contains(f'{only1allele}\*')]  # get only A or B or C
-
-    df_classII = df[df[HLA_NAME_HEAD].str.contains('DR|DQ|DP') & ~df[HLA_NAME_HEAD].str.contains("/")]
+        df_classII = df_classII[df_classII[HLA_NAME_HEAD].str.contains(f'{only1allele}\*')]
+        if digits:
+            df_classII = df_classII[df_classII[HLA_NAME_HEAD].str.contains(digits)]
 
     return df_slash, df_classI, df_classII
 
@@ -197,7 +200,7 @@ def create_new_neg(all_pairs, pos_size, labels_num):
     i = 0
     peps = [p for (p, h_name, h_seq) in all_pairs]
     hlas = [(h_name, h_seq) for (p, h_name, h_seq) in all_pairs]
-    while len(examples) < 0.3 * len(all_pairs):  # ~ 75% pos, 25% neg. (existing neg samples in data is insignificant num)
+    while len(examples) < 0.3 * len(all_pairs):  # ~ 75% df, 25% neg. (existing neg samples in data is insignificant num)
         single_pep = random.choice(peps)
         single_hla = random.choice(hlas)
 
@@ -226,47 +229,58 @@ def create_negative_samples(df, labels_num):
 
 
 def process():
-    part = '00'
-    specific_allele = 'C'  # A/B/C or None if want all three of them
+    full_df = None
+    for idx_file in range(6):
+        part = '0' + str(idx_file)
 
-    binary_or_binaryContinuous = 'binaryContinuous'
-    labels_num = 1 if binary_or_binaryContinuous == 'binary' else 2
+        specific_allele = 'DRB1'  # A/B/C or None if want all three of them
+        mhc_class = 'II'
 
-    input_file = f'../Data/IEDB_orig/MHC_and_Pep/mhc_ligand_full_{part}.csv'
-    # output_file = f'../Data/IEDB_processed/MHC_and_Pep/mhc_pep{part}{specific_allele}_25percNeg_Pep7_11_2labels.csv'
-    output_file = f'../Data/IEDB_processed/MHC_and_Pep/mhc_pep{part}{specific_allele}_NoArtificialNeg_Pep7_11_2labels.csv'
-    seq_json = '../Data/HLA-I Seq/dict_seq.json'
+        binary_or_binaryContinuous = 'binaryContinuous'
+        labels_num = 1 if binary_or_binaryContinuous == 'binary' else 2
 
-    if part == '00':
-        df = pd.read_csv(input_file, header=None, skiprows=2)
-    else:
-        df = pd.read_csv(input_file, header=None)
+        input_file = f'../Data/IEDB_orig/MHC_and_Pep/mhc_ligand_full_{part}.csv'
+        output_file = f'../Data/IEDB_processed/MHC_and_Pep/mhc_pep_00-05_{specific_allele}.csv'
+        seq_json = '../Data/HLA-II Seq/seq_dict.json'
 
-    if binary_or_binaryContinuous == 'binary':
-        df = clear_and_extract_data(df, labels_num)
-        _, df, _ = split_to_classes(df, only1allele=specific_allele)  # get only HLA class I
-        df = pep_valid(df)
-        df = drop_nan(df)
-        df = convert_binding_to_binary(df, labels_num)
-        df = add_sequences(df, seq_json, labels_num)
-        df = create_negative_samples(df, labels_num)
+        if part == '00':
+            df = pd.read_csv(input_file, header=None, skiprows=2)
+        else:
+            df = pd.read_csv(input_file, header=None)
 
-        df.to_csv(output_file, index=False)
+        # if binary_or_binaryContinuous == 'binary':
+        #     df = clear_and_extract_data(df, labels_num)
+        #     _, df, _ = split_to_classes(df, only1allele=specific_allele)  # get only HLA class I
+        #     df = pep_valid(df)
+        #     df = drop_nan(df)
+        #     df = convert_binding_to_binary(df, labels_num)
+        #     df = add_sequences(df, seq_json, labels_num)
+        #     df = create_negative_samples(df, labels_num)
+        #
+        #     df.to_csv(output_file, index=False)
 
-    elif binary_or_binaryContinuous == 'binaryContinuous':
-        df = clear_and_extract_data(df, labels_num)
-        _, df, _ = split_to_classes(df, only1allele=specific_allele)
-        df = pep_valid(df)
-        df = convert_binding_to_binary(df, labels_num)
-        df = split_samples_to_labels(df)
-        df = drop_nan(df)
-        df = add_sequences(df, seq_json, labels_num)
-        # df = create_negative_samples(df, labels_num)
+        if binary_or_binaryContinuous == 'binaryContinuous':
+            df = clear_and_extract_data(df, labels_num)
+            _, df_classI, df_classII = split_to_classes(df, specific_allele, digits=None)
+            df = df_classI if mhc_class == 'I' else df_classII
+            df = pep_valid(df, mhc_class)
+            df = convert_binding_to_binary(df, labels_num)
+            df = split_samples_to_labels(df)
+            df = drop_nan(df)
+            df = add_sequences(df, seq_json, labels_num)
+            # df = create_negative_samples(df, labels_num)
 
-        df.to_csv(output_file, index=False)
+            # df.to_csv(output_file, index=False)
 
-    else:
-        print('Error: must be "binary" or "binaryContinuous"')
+        else:
+            print('Error: must be "binary" or "binaryContinuous"')
+
+        if full_df is None:
+            full_df = df
+        else:
+            full_df = pd.concat([full_df, df], axis=0, ignore_index=True)
+
+    full_df.to_csv(output_file, index=False)
 
 
 if __name__ == '__main__':
