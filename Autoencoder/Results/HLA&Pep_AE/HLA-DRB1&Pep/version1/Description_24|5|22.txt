@@ -1,0 +1,33 @@
+Script:
+    HLA-II_Pep_model_2output.py
+
+Hyper-parameters:
+    same as 'HLA-A&Pep/version5_emb_afterNNI/Description_6|3|22.txt'
+
+Model details:
+    I took IEDB data of DRB1*08:01, and run it first on CNN-PepPred model for get peptide core (with len=9) to each sample.
+    Then, I run it on the model (that similar to HLA_Pep_model_2output) with a main different:
+    every 10 epoch, I took the positive samples from train and validation data - with full peptides - and split to 9-mers subsequences.
+    They were inserted to the model, in test mode (no gradients), and I checked, for each peptide,
+    which 9mer received the highest score prediction - and it replaced the previous peptide core.
+
+    In the test evaluation, I did similar thing - each peptide were split to all 9mer, I checked which of them
+    is highest and it was inserted to the calculation of AUC, R2
+
+    Additional thing - about the negative samples - they also were split to all 9mer (and each 9mer consider as a sample)
+    and they weren't changed in the running.
+
+    Trained Pep AE that were used: "Results/Pep_AE/Pep_LSTM/version2/lstm_model_encoding_dim=20.pt"
+    Trained HLA AE that were used: "Results/HLA_AE/HLA-DRB1_CNN/version1/cnn_embedding=15_encoding=50.pt"
+
+Data file:
+    mhc_pep_00-05_DRB1*08:01_withCore9.csv
+    same processing like before, just without filter by peptide length
+    finally, contains 8049 pairs of pep-hla.
+
+Results:
+    --------------------- Epoch: 63/100 ----------------------
+    Train		Loss: 0.0304833  |  AUC: 0.9982  |  R2: 0.1583
+    Validation	Loss: 0.0791907  |  AUC: 0.9797  |  R2: -0.1140
+
+    Test		 	AUC: 0.9343  |  R2: -1.3393

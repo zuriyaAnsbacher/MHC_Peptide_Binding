@@ -1,0 +1,31 @@
+Script:
+    HLA-II_Pep_model_2output.py
+
+Hyper-parameters:
+    same as 'HLA-A&Pep/version5_emb_afterNNI/Description_6|3|22.txt'
+    pep_optional_len: [9]
+    pep_core: 9
+    update_core_freq: 10
+    epoch_to_add_noCore_data: 5
+
+Model details:
+    Similar to 'HLA-DRB1&Pep/version1/Description.txt', with the differences:
+    1. Here I used all data of DRB1, not only DRB1*08:01.
+    2. Because it was all the data, part of the DRB1 did not have trained model in CNN-PepPred, or that their length
+       did not match to the length in the trained model. So there were samples we did not success extract their core
+       binding from CNN-PepPred. Therefore, when we trained our model (in HLA-II_Pep_model_2output script), we kept
+       aside these samples in the beginning, and only after some epoch (determine by 'epoch_to_add_noCore_data' parameter),
+       we run them on the model in 'test' mode, and received the predicted core, according the model. Then we merged
+       them into the data and continue the training process.
+
+Data file:
+    mhc_pep_00-05_DRB1_withCore9.csv
+    same processing like before, just without filter by peptide length.
+    finally, contains 240545 pairs of pep-hla.
+
+Results:
+    --------------------- Epoch: 100/100 ----------------------
+    Train		Loss: 0.1253752  |  AUC: 0.9913  |  R2: 0.5053
+    Validation	Loss: 0.1075165  |  AUC: 0.9946  |  R2: 0.5459
+
+    Test		 	AUC: 0.9531  |  R2: -0.0209
