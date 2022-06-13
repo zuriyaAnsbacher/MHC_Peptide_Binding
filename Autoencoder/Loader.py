@@ -166,6 +166,79 @@ class HLAPepDataset_2Labels(Dataset):
         return lst
 
 
+class HLAIIPepDataset_2Labels(Dataset):
+    def __init__(self, data, headers, freq_dict, amino_pos_to_num, concat_type='None'):
+        self.data = data  # DataFrame
+
+        id_header, pep_header, _,  hla_name_header, hla_seq_header, binary_header, cont_header, flag_header = headers
+        self.pep_header = pep_header
+        self.hla_name_header = hla_name_header
+        self.hla_seq_header = hla_seq_header
+        self.binary_header = binary_header
+        self.cont_header = cont_header
+        self.flag_header = flag_header
+        self.id_header = id_header
+        self.concat_type = concat_type
+        self.freq_dict = freq_dict
+
+        self.amino_pos_to_num = amino_pos_to_num
+        self.amino_acids = [letter for letter in 'ARNDCEQGHILKMFPSTWYV']
+        self.amino_to_ix = {amino: index for index, amino in enumerate(self.amino_acids)}
+        self.pep_oneHot = self.get_oneHot_map_pep()
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        pep = self.data[self.pep_header][index]
+        hla_name = self.data[self.hla_name_header][index]
+        hla_seq = self.data[self.hla_seq_header][index]
+        binary = float(self.data[self.binary_header][index])
+        continuous = float(self.data[self.cont_header][index])
+        flag = float(self.data[self.flag_header][index])
+        sample_id = self.data[self.id_header][index]
+
+        hla = self.convert_to_numeric(hla_seq)
+        pep = self.convert_to_one_hot(pep)
+        continuous = np.log(float(continuous) + 1/np.e) if (flag == 1) else continuous # epsilon=1/e (for log(0+eps)=-1)
+        freq2loss = float(self.freq_dict[hla_name])
+
+        sample = (pep, hla, binary, continuous, flag, freq2loss, sample_id)
+        return sample
+
+    def get_oneHot_map_pep(self):
+        one_hot = {a: [0] * 20 for a in self.amino_to_ix.keys()}
+        for key in one_hot:
+            one_hot[key][self.amino_to_ix[key]] = 1
+        return one_hot
+
+    def convert_to_numeric(self, seq):
+        vec = [0] * len(seq)
+        for i in range(len(seq)):
+            amino = seq[i]
+            pair = (amino, i)
+            vec[i] = self.amino_pos_to_num[pair]
+        return vec
+
+    def convert_to_one_hot(self, seq):
+        vec = []
+        for s in seq:
+            vec += self.pep_oneHot[s]
+        return vec
+
+    def collate(self, batch):
+        pep, hla, binary, continuous, flag, freq2loss, sample_id = zip(*batch)
+        lst = list()
+        lst.append(torch.Tensor(pep))
+        lst.append(torch.Tensor(hla))
+        lst.append(torch.Tensor(binary))
+        lst.append(torch.Tensor(continuous))
+        lst.append(torch.Tensor(flag))
+        lst.append(torch.Tensor(freq2loss))
+        lst.append(torch.Tensor(sample_id))
+        return lst
+
+
 def check():
 
     def create_dict_aa_position(max_len):
