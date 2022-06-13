@@ -1,0 +1,44 @@
+{
+  "version": "temp",
+  "cuda": 1,
+  "run_category": "classic",
+
+  "datafile": "../Data/IEDB_processed/MHC_and_Pep/mhc_pep_00-05_DRB1_withCore9.csv",
+  "HLA_model_path": "Results/HLA_AE/HLA-DRB1_CNN/version1/cnn_embedding=15_encoding=50.pt",
+  "pep_model_path": "Results/Pep_AE/Pep_LSTM/version2/lstm_model_encoding_dim=20.pt",
+  "combined_model_path": "Results/HLA&Pep_AE/HLA-ABC&Pep/version5/model_hlaABC.pt",
+
+  "res_dir": "Results",
+  "AE_dir": "HLA&Pep_AE",
+  "specific_model_dir": "HLA-DRB1&Pep",
+  "pt_file": "model.pt",
+
+  "freq_dir": "../Data/HLA_Freq_in_IEDB/",
+  "freq_file": "HLA-DRB1.csv",
+
+  "pep_header": "Pep",
+  "HLA_name_header": "HLA name",
+  "HLA_seq_header": "HLA Seq",
+  "binary_header": "Binary binding",
+  "continuous_binding_header": "Continuous binding",
+  "flag_header": "Flag",
+
+  "PepCore_header": "BindingCore",
+  "ID_header": "ID_Pep",
+
+  "noCore_sign": "unknown",
+
+  "split_score_by_freq": false,
+  "loss_weighted_by_freq": false,
+  "freeze_weight_AEs": false,
+  "transfer_learning": false,
+
+  "epochs": 2,
+  "batch_size": 64,
+  "pep_optional_len": [9],
+  "pep_core": 9,
+  "update_core_freq": 10,
+  "epoch_to_add_noCore_data": 5
+}
+
+
