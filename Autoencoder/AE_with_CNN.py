@@ -16,6 +16,16 @@ import matplotlib.pyplot as plt
 from Models import CNN_AE
 
 
+def create_paths(res_dir, AE_dir, specific_model_dir, save_dir):
+    dir1 = res_dir
+    dir2 = os.path.join(res_dir, AE_dir)
+    dir3 = os.path.join(res_dir, AE_dir, specific_model_dir)
+    dir4 = save_dir
+
+    for d in [dir1, dir2, dir3, dir4]:
+        if not os.path.exists(d):
+            os.mkdir(d)
+
 def load_all_data(datafile, SEQ):
     df = pd.read_csv(datafile)
     data = list(df[SEQ])
@@ -270,18 +280,16 @@ def evaluate(model, batches, batches_for_loss, ix_to_amino, max_len,
 
 
 def main(parameters):
-    root = parameters["root"]
-    datafile = parameters["datafile"]
     version = parameters["version"]
-    save_path = root + '_CNN_Results'
-    save_dir = f'{save_path}/CNN_version{version}'
+    cuda = parameters["cuda"]
 
-    if not os.path.exists(save_path):
-        os.mkdir(save_path)
+    res_dir = parameters["res_dir"]
+    AE_dir = parameters["AE_dir"]
+    specific_model_dir = parameters["specific_model_dir"]
+    save_dir = f'{res_dir}/{AE_dir}/{specific_model_dir}/version{version}'
+    create_paths(res_dir, AE_dir, specific_model_dir, save_dir)
 
-    if not os.path.exists(save_dir):
-        os.mkdir(save_dir)
-
+    datafile = parameters["datafile"]
     SEQ = parameters["SEQ"]
     epochs = parameters["EPOCHS"]
     encoding_dim = parameters["ENCODING_DIM"]
@@ -295,8 +303,6 @@ def main(parameters):
                     'dropout_enc': 0, 'dropout_dec': 0}
 
     amino_acids = [letter for letter in 'ARNDCEQGHILKMFPSTWYV']
-    # amino_to_ix = {amino: index for index, amino in enumerate(amino_acids + ['X'])}
-    # ix_to_amino = {index: amino for index, amino in enumerate(amino_acids + ['X'])}
     amino_to_ix = {amino: index for index, amino in enumerate(amino_acids)}
     ix_to_amino = {index: amino for index, amino in enumerate(amino_acids)}
 
@@ -318,7 +324,7 @@ def main(parameters):
                                                       batch_size, max_len)
     validation_batches, validation_batches_for_loss = get_batches(validation, amino_to_ix,
                                                                   amino_pos_to_num, batch_size, max_len)
-    device = 'cuda:1' if torch.cuda.is_available() else 'cpu'
+    device = f'cuda:{cuda}' if torch.cuda.is_available() else 'cpu'
     model, train_loss_list, val_loss_list, num_epochs = \
         run_model(train_batches, validation_batches, train_batches_for_loss, validation_batches_for_loss,
                   max_len, optim_params, model_params, encoding_dim=encoding_dim, epochs=epochs,
@@ -342,14 +348,14 @@ def main(parameters):
 
 
 def main_nni(stable_params):
-
+    cuda = stable_params["cuda"]
     datafile = stable_params["datafile"]
     SEQ = stable_params["SEQ"]
     epochs = stable_params["EPOCHS"]
     encoding_dim = stable_params["ENCODING_DIM"]
+    batch_size = stable_params["BATCH_SIZE"]
 
     nni_params = nni.get_next_parameter()
-    batch_size = nni_params["batch_size"]
     lr = nni_params["lr"]
     weight_decay = nni_params["weight_decay"]
     embedding_dim = nni_params["embedding_dim"]
@@ -385,7 +391,7 @@ def main_nni(stable_params):
     validation_batches, validation_batches_for_loss = get_batches(validation, amino_to_ix,
                                                                   amino_pos_to_num, batch_size, max_len)
 
-    device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+    device = f'cuda:{cuda}' if torch.cuda.is_available() else 'cpu'
     _, _, _, _ = run_model(train_batches, validation_batches, train_batches_for_loss, validation_batches_for_loss,
                            max_len, optim_params, model_params, encoding_dim=encoding_dim, epochs=epochs,
                            batch_size=batch_size, device=device, early_stopping=True, is_nni=True)
