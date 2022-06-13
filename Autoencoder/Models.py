@@ -49,7 +49,7 @@ class CNN_Encoder(nn.Module):
     def forward(self, x):
         x = self.embedding(x.long())
         # input size to Conv2d: (batch, number channels, height, width)
-        x = x.view(self.batch_size, self.embedding_dim, -1).unsqueeze(1)
+        x = x.view(x.size()[0], self.embedding_dim, -1).unsqueeze(1)
         x = self.conv1(x)
         x = self.conv2(x)
         x = x.view(x.size(0), -1)
@@ -190,8 +190,8 @@ class LSTM_AE(nn.Module):
 
 
 class HLA_Pep_Model(nn.Module):
-    def __init__(self, encoding_dim_pep, encoding_dim_hla, pep_AE, hla_AE,
-                 concat_type, concat_oneHot_dim, concat_emb_dim, model_params):
+    def __init__(self, encoding_dim_pep, encoding_dim_hla, pep_AE, hla_AE, model_params,
+                 concat_type='None', concat_oneHot_dim=None, concat_emb_dim=None):
         super().__init__()
 
         self.hidden_size = model_params['hidden_size']
@@ -218,7 +218,7 @@ class HLA_Pep_Model(nn.Module):
         self.fc2A = nn.Linear(self.hidden_size, 1)
         self.fc2B = nn.Linear(self.hidden_size, 1)
 
-    def forward(self, pep, hla, hla_oneHot, emb):
+    def forward(self, pep, hla, hla_oneHot=None, emb=None):
         pep_encoded, _ = self.pep_AE(pep)
         hla_encoded, _ = self.hla_AE(hla)
 
