@@ -163,7 +163,10 @@ class ModelWrapper:
         return x_train, y_train, x_val, y_val, x_test, y_test
 
     def calculate_var(self, train):
-        """ Calculate the variance of log continuous train values. Used for continuous loss (divided by var) """
+        """
+        Calculate the variance of log continuous train values.
+        Used for continuous loss (divided by var)
+        """
         cont_values = train[train[self.flag_header] == 1][self.cont_header]
         self.var = np.log(cont_values.astype(float), where=cont_values != 0).var()
 
@@ -208,7 +211,6 @@ class ModelWrapper:
             self.test_loader = createLoader(test_data, test_sampler)
 
     def processing(self):
-        """ Process data """
         print('Loading data ...')
         data = pd.read_csv(self.datafile)
 
@@ -395,8 +397,8 @@ class ModelWrapper:
                                        combined_model_dict, self.architect_params, self.concat_type)
         else:
             model = HLA_Pep_Model(self.pep_model_dict['encoding_dim'], self.HLA_model_dict['encoding_dim'],
-                                  pep_model, hla_model, self.concat_type, self.concat_oneHot_dim,
-                                  self.concat_emb_dim, self.architect_params)
+                                  pep_model, hla_model, self.architect_params, self.concat_type,
+                                  self.concat_oneHot_dim, self.concat_emb_dim)
 
         model.to(self.device)
         self.optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()),
