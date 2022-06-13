@@ -1,14 +1,19 @@
 {
-  "root" : "HLA-A",
-  "datafile": "../Data/HLA-I Seq/all_seq_A.csv",
-  "version": "CV_vers2_",
+  "version": "2",
+  "cuda": 0,
+
+  "res_dir": "Results",
+  "AE_dir": "HLA_AE",
+  "specific_model_dir": "HLA-DRB1_CNN",
+  "datafile": "../Data/HLA-II Seq/Processed/DRB1.csv",
+
   "SEQ": "HLA_SEQ",
   "HLA_or_Pep": "HLA",
 
-  "EPOCHS" : 1000,
+  "EPOCHS" : 600,
   "ENCODING_DIM" : 50,
   "EMBEDDING_DIM": 15,
   "BATCH_SIZE": 64,
 
-  "IS_NNI": false
+  "IS_NNI": true
 }
