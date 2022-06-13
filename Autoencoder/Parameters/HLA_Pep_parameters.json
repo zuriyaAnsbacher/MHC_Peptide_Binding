@@ -1,34 +1,40 @@
 {
-  "root" : "HLA_Pep",
-  "datafile": "../Data/IEDB_processed/MHC_and_Pep/mhc_pep_00-05A_NoArtificial_Pep7_11_2labels.csv",
-  "version": "9_NoneAllData",
+  "version": "0_",
+  "cuda": 2,
+  "run_category": "classic",
 
-  "Pep_Header": "Pep",
-  "HLA_Name_Header": "HLA name",
-  "HLA_Seq_Header": "HLA Seq",
-  "Binding_Header": "Binding",
-  "Binary_Binding_Header": "Binary binding",
-  "Continuous_Binding_Header": "Continuous binding",
-  "Flag_Header": "Flag",
+  "datafile": "../Data/IEDB_processed/MHC_and_Pep/mhc_pep00ABC_NoArtificial_Pep7_11_2labels.csv",
+  "HLA_model_path": "Results/HLA_AE/HLA-ABC_CNN/version1/cnn_embedding=15_encoding=50.pt",
+  "pep_model_path": "Results/Pep_AE/Pep_LSTM/version2/lstm_model_encoding_dim=20.pt",
+  "combined_model_path": "Results/HLA&Pep_AE/HLA-ABC&Pep/version5/model_hlaABC.pt",
 
-  "HLA_Model_path": "HLA-A_CNN_Results/CNN_version3_(cv1)/cnn_embedding=15_encoding=50.pt",
-  "Pep_Model_path": "Pep_LSTM_Results/LSTM_version2_(cv1)/lstm_model_encoding_dim=20.pt",
+  "res_dir": "Results",
+  "AE_dir": "HLA&Pep_AE",
+  "specific_model_dir": "HLA-ABC&Pep",
+  "pt_file": "model.pt",
 
-  "HLA_Freqs_path": "../Data/Common HLA-I/common_A_IEDB_files.csv",
-  "Saved_model_file": "model_all_data.pt",
+  "freq_dir": "../Data/HLA_Freq_in_IEDB/",
+  "freq_file": "HLA-A.csv",
 
-  "CUDA": 0,
-  "Epochs" : 800,
-  "Batch_size": 64,
-  "Pep_optional_len": [7, 8, 9, 10, 11],
+  "pep_header": "Pep",
+  "HLA_name_header": "HLA name",
+  "HLA_seq_header": "HLA Seq",
+  "binary_header": "Binary binding",
+  "continuous_binding_header": "Continuous binding",
+  "flag_header": "Flag",
 
-  "Concat_oneHot_dim": 31,
-  "Concat_emb_dim": 25,
-  "Split_score_by_freq": true,
+  "concat_type": "None",
+  "concat_oneHot_dim": 31,
+  "concat_emb_dim": 25,
 
-  "Concat_type": "None",
-  "Freeze_weight_AEs": false,
+  "split_score_by_freq": false,
+  "loss_weighted_by_freq": false,
+  "freeze_weight_AEs": false,
+  "transfer_learning": false,
 
-  "IS_TEST": false,
-  "IS_NNI": false
+  "epochs": 5,
+  "batch_size": 64,
+  "pep_optional_len": [7, 8, 9, 10, 11]
 }
+
+
