@@ -32,10 +32,10 @@ def get_existing_model(model_dict, model_name, max_len_hla=183, is_test=False):
 
 
 def get_combined_model(hla_model, hla_model_dict, pep_model, pep_model_dict, combined_model_dict,
-                       combined_model_params, concat_type):
+                       combined_model_params, concat_type='None'):
     combined_model = HLA_Pep_Model(pep_model_dict['encoding_dim'], hla_model_dict['encoding_dim'],
-                                   pep_model, hla_model, concat_type=concat_type, concat_oneHot_dim=31,
-                                   concat_emb_dim=25, model_params=combined_model_params)
+                                   pep_model, hla_model, model_params=combined_model_params, concat_type=concat_type,
+                                   concat_oneHot_dim=31, concat_emb_dim=25)
     state_dict = combined_model_dict['model_state_dict']
     combined_model.load_state_dict(state_dict)
 
