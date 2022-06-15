@@ -26,6 +26,7 @@ class ModelWrapper:
         self.cuda_num = params.get("cuda", 0)
         self.device = f'cuda:{self.cuda_num}' if torch.cuda.is_available() else 'cpu'
         self.run_category = params.get("run_category", "classic")  # classic, test, nni
+        self.allele = params.get("allele")
 
         # ----- paths -----
         self.datafile = params.get("datafile")
@@ -568,7 +569,8 @@ class ModelWrapper:
             return _pos, _neg
 
         print('Updating new cores ...')
-        for data_type in ['train', 'val']:
+        # for data_type in ['train', 'val']:
+        for data_type in ['train']:
             data = self.train_data if data_type == 'train' else self.val_data
 
             # updating done on positive only
@@ -587,8 +589,12 @@ class ModelWrapper:
             self.update_loader(loader, data_type)
 
     def run_model(self):
+        if self.allele == 'DRB1':
+            max_len_hla = 266
+        elif self.allele == 'DQB1':
+            max_len_hla = 261
         pep_model = get_existing_model(self.pep_model_dict, model_name='pep')
-        hla_model = get_existing_model(self.HLA_model_dict, model_name='hla', max_len_hla=266)  # todo: add max to param?
+        hla_model = get_existing_model(self.HLA_model_dict, model_name='hla', max_len_hla=max_len_hla)
 
         if self.freeze_weight_AEs:
             for param in list(pep_model.parameters()) + list(hla_model.parameters()):
