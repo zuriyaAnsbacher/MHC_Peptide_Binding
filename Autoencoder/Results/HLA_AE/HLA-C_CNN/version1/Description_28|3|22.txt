@@ -2,7 +2,7 @@ Like '../HLA-A_CNN/version3/Description_2|2|22.txt'. same hyper-parameters, mode
 
 Data file:
     all_seq_C.csv (processed)
-    contains 2065 HLA-B sequences
+    contains 2065 HLA-C sequences
     processing done by:
         drop duplicates
 
