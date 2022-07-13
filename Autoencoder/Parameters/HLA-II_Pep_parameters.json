@@ -1,12 +1,13 @@
 {
-  "version": "temp",
-  "cuda": 1,
-  "run_category": "classic",
+  "version": "4",
+  "cuda": 2,
+  "mode": "classic",
+  "allele": "DRB1",
 
   "datafile": "../Data/IEDB_processed/MHC_and_Pep/mhc_pep_00-05_DRB1_withCore9.csv",
   "HLA_model_path": "Results/HLA_AE/HLA-DRB1_CNN/version1/cnn_embedding=15_encoding=50.pt",
   "pep_model_path": "Results/Pep_AE/Pep_LSTM/version2/lstm_model_encoding_dim=20.pt",
-  "combined_model_path": "Results/HLA&Pep_AE/HLA-ABC&Pep/version5/model_hlaABC.pt",
+  "combined_model_path": "Results/HLA&Pep_AE/HLA-DRB1&Pep/version_/model.pt",
 
   "res_dir": "Results",
   "AE_dir": "HLA&Pep_AE",
@@ -25,6 +26,7 @@
 
   "PepCore_header": "BindingCore",
   "ID_header": "ID_Pep",
+  "flag_Kmer_header": "Flag Kmer",
 
   "noCore_sign": "unknown",
 
@@ -33,12 +35,12 @@
   "freeze_weight_AEs": false,
   "transfer_learning": false,
 
-  "epochs": 2,
+  "epochs": 400,
   "batch_size": 64,
   "pep_optional_len": [9],
   "pep_core": 9,
   "update_core_freq": 10,
-  "epoch_to_add_noCore_data": 5
+  "epoch_to_add_noCore_data": 8
 }
 
 
