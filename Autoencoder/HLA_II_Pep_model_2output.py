@@ -9,13 +9,16 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 import torch.optim as optim
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score, r2_score
+from sklearn.model_selection import train_test_split, GroupShuffleSplit
+from sklearn.metrics import roc_auc_score, r2_score, precision_score, recall_score
+
+import sys
+sys.path.insert(0, os.getcwd())
 
 from Models import HLA_Pep_Model
 from Loader import HLAIIPepDataset_2Labels
 from Sampler import SamplerByLength
-from Plots import plot_loss, plot_auc, plot_r2
+from Plots import plot_loss, plot_auc, plot_r2, temp_plot_loss, temp_plot_auc  # todo: remove temp
 from Utils import get_existing_model, load_model_dict, get_combined_model, get_freq_dict
 
 
@@ -25,7 +28,7 @@ class ModelWrapper:
         self.version = params.get("version")
         self.cuda_num = params.get("cuda", 0)
         self.device = f'cuda:{self.cuda_num}' if torch.cuda.is_available() else 'cpu'
-        self.run_category = params.get("run_category", "classic")  # classic, test, nni
+        self.mode = params.get("mode", "classic")  # classic, test, nni
         self.allele = params.get("allele")
 
         # ----- paths -----
@@ -40,7 +43,7 @@ class ModelWrapper:
         self.specific_model_dir = params.get("specific_model_dir")
         self.res_path = f'{self.res_dir}/{self.AE_dir}/{self.specific_model_dir}/version{self.version}'
         self.pt_file = params.get("pt_file")
-        if self.run_category == "classic":
+        if self.mode == "classic":
             self.create_paths()
         # frequencies paths
         self.freq_dir = params.get("freq_dir")
@@ -58,9 +61,11 @@ class ModelWrapper:
 
         self.pepCore_header = params.get("PepCore_header")
         self.ID_header = params.get("ID_header")
+        self.flag_Kmer_header = params.get("flag_Kmer_header")
 
         self.headers = [self.ID_header, self.pepCore_header, self.pep_header, self.HLA_name_header,
-                        self.HLA_seq_header, self.binary_header, self.cont_header, self.flag_header]
+                        self.HLA_seq_header, self.binary_header, self.cont_header, self.flag_header,
+                        self.flag_Kmer_header]
 
         # existing string when binding core is unknown
         self.noCore_sign = params.get("noCore_sign", "unknown")
@@ -79,8 +84,13 @@ class ModelWrapper:
         self.update_core_freq = params.get("update_core_freq", 10)
         self.epoch_to_add_noCore_data = params.get("epoch_to_add_noCore_data", 20)
 
+        if self.allele == 'DRB1':
+            self.max_len_hla = 266
+        elif self.allele == 'DQB1':
+            self.max_len_hla = 261
+
         self.optim_params, self.architect_params = self.get_params_for_model_and_optimizer()
-        if self.run_category == 'nni':
+        if self.mode == 'nni':
             self.set_nni_params()
 
         # ----- load AES -----
@@ -90,7 +100,7 @@ class ModelWrapper:
         # ----- for later use -----
         self.train_data, self.val_data, self.test_data = None, None, None
         self.train_loader, self.val_loader, self.test_loader = None, None, None
-        self.data_without_core = None
+        self.data_without_core = {'train': None, 'val': None, 'test': None}
         self.optimizer = None
         self.var = None
 
@@ -133,7 +143,7 @@ class ModelWrapper:
         self.optim_params = {'lr': lr, 'weight_decay': weight_decay, 'alpha': 0.6}
         self.architect_params = {'hidden_size': hidden_size, 'activ_func': activ_map[activ_func], 'dropout': dropout}
 
-    def keep_aside_sample_without_core(self, data):
+    def keep_aside_sample_without_core(self, data, descrip):
         """
         When the data contains samples whose cores are unknown, these samples are kept separately.
         Later, after training e model along some epochs, these samples are inserted into the
@@ -145,10 +155,11 @@ class ModelWrapper:
 
         # keep the samples without core aside, to be added to data after first stage of training
         df_no_core = data[data[self.pepCore_header] == self.noCore_sign]
-        self.data_without_core = df_no_core
+        self.data_without_core[descrip] = df_no_core
 
         # data contains now only samples with core
         data = data[data[self.pepCore_header] != self.noCore_sign]
+        data.reset_index(drop=True, inplace=True)
         return data
 
     @ staticmethod
@@ -179,8 +190,26 @@ class ModelWrapper:
             # negative binary: split to all K-mer
             return self.createKmers(_df)
 
-        data['Kmer'] = data.apply(createKmers_for_neg, axis=1)
+        def create_Kmer_flag_column(_df):
+            # in negative binary samples, sign "1" to the original Kmer (from PepPred model), and 0 to other
+            if _df[self.binary_header] == 0:
+                if _df[self.pepCore_header] == _df['Kmer']:
+                    return 1
+                else:
+                    return 0
+            # positive binary, sign 1
+            elif _df[self.binary_header] == 1:
+                return 1
+            # continuous, sign -1 (they are not inserted to the loss that required Kmer flag)
+            elif _df[self.binary_header] == -1:
+                return -1
+
+        # create all Kmers for negative
+        data.loc[:, 'Kmer'] = data.apply(createKmers_for_neg, axis=1)
         data = self.split_Kmer_to_rows(data, Kmer_col_name='Kmer')
+
+        # create Kmer flag column (that is used in loss_bce2)
+        data.loc[:, self.flag_Kmer_header] = data.apply(create_Kmer_flag_column, axis=1)
 
         # replace old core column with Kmer column (that contains the original + splitting negative)
         data.drop([self.pepCore_header], axis=1, inplace=True)
@@ -188,33 +217,53 @@ class ModelWrapper:
 
         return data
 
-    def data_to_features_and_labels(self, data):
-        def reShape(header): return data[header].values.reshape(-1, 1)
-        x = np.concatenate((reShape(self.ID_header), reShape(self.pepCore_header), reShape(self.pep_header),
-                            reShape(self.HLA_name_header), reShape(self.HLA_seq_header)), axis=1)
-        y = np.concatenate((reShape(self.binary_header), reShape(self.cont_header),
-                            reShape(self.flag_header)), axis=1)
-        return x, y
-
-    def split_data(self, x, y):
+    def split_data(self, data):
         """
-        Split data to train-validation-test in classic case, or train-validation in NNI case.
-        'stratify' done according binary binding (for proportional ratio).
-        Note: hla or peptide could be in some groups (train-val-test) but not as a pair.
-         """
-        if self.run_category == 'classic':
-            x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.2, stratify=y[:, 0])
-            x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=0.15, stratify=y_train[:, 0])
-        elif self.run_category == 'nni':
-            x_train, x_val, y_train, y_val = train_test_split(x, y, test_size=0.2, stratify=y[:, 0])
-            x_test, y_test = None, None
+        split data to train-validation-test, such that a pair of mhc-pep will not exist in 2 groups.
+        to do that, we use GroupShuffleSplit.
+        """
+        # create column with pairs of mhc-pep (temporary)
+        pair_header = 'HLA_Pep_Pair'
+        data.loc[:, pair_header] = data.apply(lambda row: f'{row[self.HLA_name_header]}~{row[self.pep_header]}', axis=1)
+
+        groups = list(data[pair_header])
+        gss = GroupShuffleSplit(n_splits=1, train_size=.8)
+        for train_idx, test_idx in gss.split(np.array(data.loc[:, pair_header]), groups=groups):
+            train = data.iloc[train_idx]
+            test = data.iloc[test_idx]
+
+        if self.mode == 'classic':
+            groups = list(train[pair_header])
+            gss = GroupShuffleSplit(n_splits=1, train_size=.85)
+            for train_idx, val_idx in gss.split(np.array(train.loc[:, pair_header]), groups=groups):
+                val = train.iloc[val_idx]
+                train = train.iloc[train_idx]
+
+        # in nni mode, there is no test, only train and validation
+        elif self.mode == 'nni':
+            val = copy.deepcopy(test)
+            test = None
+
         else:
-            raise KeyError("run_category has to be 'classic'/'nni' in split_data")
+            raise KeyError("mode has to be 'classic'/'nni' in split_data")
 
-        return x_train, y_train, x_val, y_val, x_test, y_test
+        # remove mhc-pair pairs column
+        for df in [train, val, test]:
+            if df is not None:  # in nni, test=None
+                df.drop([pair_header], axis=1, inplace=True)
 
-    def np2df(self, x, y):
-        return pd.DataFrame(np.concatenate((x, y), axis=1), columns=self.headers)
+        return train, val, test
+
+        ### split data when not ensure that a pair of mhc-pep won't be in 2 groups ###
+        # if self.mode == 'classic':
+        #     train, test = train_test_split(data, test_size=0.2, stratify=data[[self.binary_header]])
+        #     train, val = train_test_split(train, test_size=0.15, stratify=train[[self.binary_header]])
+        # elif self.mode == 'nni':
+        #     train, val = train_test_split(data, test_size=0.2, stratify=data[[self.binary_header]])
+        #     test = None
+        # else:
+        #     raise KeyError("mode has to be 'classic'/'nni' in split_data")
+        # return train, val, test
 
     def df2dataset(self, df):
         return HLAIIPepDataset_2Labels(df, self.headers, self.freq_dict, self.HLA_model_dict["amino_pos_to_num"])
@@ -259,46 +308,35 @@ class ModelWrapper:
         cont_values = train[train[self.flag_header] == 1][self.cont_header]
         self.var = np.log(cont_values.astype(float), where=cont_values != 0).var()
 
-    def create_dataLoaders(self, x_train, y_train, x_val, y_val, x_test=None, y_test=None):
-        """
-        Create data loaders from np arrays
-        """
-        descriptions = ['train', 'val']
-        all_datasets = [(x_train, y_train), (x_val, y_val)]
-        if x_test is not None:
-            descriptions.append('test')
-            all_datasets.append((x_test, y_test))
+    def create_dataLoaders(self, data, descrip):
+        sampler = None
+        self.update_data(data, descrip)
 
-        for descrip, xy_data in zip(descriptions, all_datasets):
-            x = xy_data[0]
-            y = xy_data[1]
-            sampler = None
+        # if descrip != 'test':
+        if True:  # todo: change to the line above
+            dataset = self.df2dataset(data)
+            # if there is more than one option to pep len, organize batches by len
+            if len(self.pep_optional_len) > 1:
+                sampler = self.createSampler(dataset)
+            loader = self.createLoader(dataset, descrip, sampler)
+            self.update_loader(loader, descrip)
 
-            df = self.np2df(x, y)
-            self.update_data(df, descrip)
-
-            if descrip != 'test':
-                dataset = self.df2dataset(df)
-                # if there is more than one option to pep len, organize batches by len
-                if len(self.pep_optional_len) > 1:
-                    sampler = self.createSampler(dataset)
-                loader = self.createLoader(dataset, descrip, sampler)
-                self.update_loader(loader, descrip)
-
-            if descrip == 'train':
-                self.calculate_var(df)  # for later use (loss calculation)
+        if descrip == 'train':
+            self.calculate_var(data)  # for later use (loss calculation)
 
     def processing(self):
         print('Loading data ...')
 
         data = pd.read_csv(self.datafile)
-        if self.run_category != 'test':
-            data = self.split_neg_to_Kmer(data)
-            data = self.keep_aside_sample_without_core(data)
-            x, y = self.data_to_features_and_labels(data)
-            x_train, y_train, x_val, y_val, x_test, y_test = self.split_data(x, y)
-            self.create_dataLoaders(x_train, y_train, x_val, y_val, x_test, y_test)
-        else:  # todo: check
+        if self.mode != 'test':
+            train, val, test = self.split_data(data)
+            for descrip, dataset in zip(['train', 'val', 'test'], [train, val, test]):
+                if dataset is None:  # test, in nni
+                    continue
+                dataset = self.keep_aside_sample_without_core(dataset, descrip)
+                dataset = self.split_neg_to_Kmer(dataset)
+                self.create_dataLoaders(dataset, descrip)
+        else:
             self.test_data = data
 
         print('Loading finished ... ')
@@ -326,16 +364,16 @@ class ModelWrapper:
     def predict(self, model, dataloader, group):
         total_loss = 0
         preds1, preds2, trues1, trues2 = [], [], [], []
-        flags, freqs, ids = [], [], []
+        flags, flags_Kmer, freqs, ids = [], [], [], []
         sigmoid = nn.Sigmoid()
         device = self.device
         alpha = self.optim_params['alpha']
 
         for batch in dataloader:
-            pep, hla, y1, y2, flag, freq2loss, sample_id = batch  # y1 binary, y2 continuous
-            pep, hla, y1, y2, flag, freq2loss, sample_id = pep.to(device), hla.to(device), y1.to(device), \
-                                                           y2.to(device), flag.to(device), freq2loss.to(device), \
-                                                           sample_id.to(device)
+            pep, hla, y1, y2, flag, freq2loss, sample_id, flag_Kmer = batch  # y1 binary, y2 continuous
+            pep, hla, y1, y2, flag, freq2loss, sample_id, flag_Kmer = pep.to(device), hla.to(device), y1.to(device), \
+                                                                      y2.to(device), flag.to(device), freq2loss.to(device), \
+                                                                      sample_id.to(device), flag_Kmer.to(device)
             if group == 'train':
                 self.optimizer.zero_grad()
 
@@ -349,10 +387,17 @@ class ModelWrapper:
                 new_pred2 = torch.multiply(pred2, flag)
                 new_y2 = torch.multiply(y2, flag)
 
-                loss_bce = self.loss_BCE(new_pred1, new_y1, weights=freq2loss)
+                # for loss_bce2, keep only samples with most binding Kmer.
+                # in positives, those are the only in data anyway, but in negative all Kmers exist in data
+                new_pred1_best_Kmers = torch.multiply(new_pred1, flag_Kmer)
+                new_y1_best_Kmers = torch.multiply(new_y1, flag_Kmer)
+
+                loss_bce1 = self.loss_BCE(new_pred1, new_y1, weights=freq2loss)
+                loss_bce2 = self.loss_BCE(new_pred1_best_Kmers, new_y1_best_Kmers, weights=freq2loss)
                 loss_mse = self.loss_MSE(new_pred2, new_y2, weights=freq2loss) / self.var
 
-                loss = alpha * loss_bce + (1 - alpha) * loss_mse
+                # loss = alpha * loss_bce + (1 - alpha) * loss_mse
+                loss = 0.3 * loss_bce1 + 0.5 * loss_bce2 + 0.2 * loss_mse
                 total_loss += loss.item()
 
             if group == 'train':
@@ -364,19 +409,26 @@ class ModelWrapper:
             preds2 += pred2.tolist()
             trues2 += y2.tolist()
             flags += flag.tolist()
+            flags_Kmer += flag_Kmer.tolist()
             freqs += freq2loss.tolist()
             ids += sample_id.tolist()
 
-        return total_loss, preds1, trues1, preds2, trues2, flags, freqs, ids
+        return total_loss, preds1, trues1, preds2, trues2, flags, flags_Kmer, freqs, ids
 
     @staticmethod
-    def get_scores(preds1, trues1, preds2, trues2, flags):
+    def get_scores(preds1, trues1, preds2, trues2, flags, flags_Kmer, do_precision_recall=False, is_evaluate=False):
         """
-        Calculate AUC and R2 scores
+        Calculate AUC and R2 scores.
+        Split first to binary (preds1, trues1), for AUC, and continuous (preds2, trues2), for R2.
         """
-        # split to binary (preds1, trues1) and continuous (preds2, trues2)
-        preds1 = [preds1[i] for i in range(len(flags)) if flags[i] == 0]
-        trues1 = [trues1[i] for i in range(len(flags)) if flags[i] == 0]
+        # test (mode or group)
+        if is_evaluate:
+            preds1 = [preds1[i] for i in range(len(flags)) if flags[i] == 0]
+            trues1 = [trues1[i] for i in range(len(flags)) if flags[i] == 0]
+        # train/val (calculate AUC on the most binding. it makes it harder for negatives)
+        else:
+            preds1 = [preds1[i] for i in range(len(flags)) if flags[i] == 0 and flags_Kmer[i] == 1]
+            trues1 = [trues1[i] for i in range(len(flags)) if flags[i] == 0 and flags_Kmer[i] == 1]
         preds2 = [preds2[i] for i in range(len(flags)) if flags[i] == 1]
         trues2 = [trues2[i] for i in range(len(flags)) if flags[i] == 1]
 
@@ -384,6 +436,13 @@ class ModelWrapper:
         r2 = r2_score(trues2, preds2)
 
         print(f'AUC: {"%.4f" % round(auc, 4)}  |  R2: {"%.4f" % round(r2, 4)}')
+
+        if do_precision_recall:
+            for thre in [0.1, 0.2, 0.3, 0.4, 0.5]:
+                print(f'Threshold {thre}:')
+                precision = precision_score(trues1, np.where(np.array(preds1) > thre, 1, 0))
+                recall = recall_score(trues1, np.where(np.array(preds1) > thre, 1, 0))
+                print(f'Precision: {"%.4f" % round(precision, 4)}  | Recall: {"%.4f" % round(recall, 4)}')
         return auc, r2
 
     @staticmethod
@@ -414,13 +473,13 @@ class ModelWrapper:
     def train_epoch(self, model):
         model.train()
         print('Train', end='\t\t')
-        total_loss, preds1, trues1, preds2, trues2, flags, freqs, _ = self.predict(model, self.train_loader, group='train')
+        total_loss, preds1, trues1, preds2, trues2, flags, flags_Kmer, freqs, _ = self.predict(model, self.train_loader, group='train')
         print(f'Loss: {"%.7f" % round(total_loss / len(self.train_loader), 7)}  |', end='  ')
 
         if self.split_score_by_freq:
             auc, r2 = self.get_scores_by_freq(preds1, trues1, preds2, trues2, flags, freqs)
         else:
-            auc, r2 = self.get_scores(preds1, trues1, preds2, trues2, flags)
+            auc, r2 = self.get_scores(preds1, trues1, preds2, trues2, flags, flags_Kmer)
 
         return total_loss / len(self.train_loader), auc, r2
 
@@ -428,18 +487,35 @@ class ModelWrapper:
         model.eval()
         print('Validation', end='\t')
         with torch.no_grad():
-            total_loss, preds1, trues1, preds2, trues2, flags, freqs, _ = self.predict(model, self.val_loader, group='val')
+            total_loss, preds1, trues1, preds2, trues2, flags, flags_Kmer, freqs, _ = self.predict(model, self.val_loader, group='val')
             print(f'Loss: {"%.7f" % round(total_loss / len(self.val_loader), 7)}  |', end='  ')
 
         if self.split_score_by_freq:
             auc, r2 = self.get_scores_by_freq(preds1, trues1, preds2, trues2, flags, freqs)
         else:
-            auc, r2 = self.get_scores(preds1, trues1, preds2, trues2, flags)
+            auc, r2 = self.get_scores(preds1, trues1, preds2, trues2, flags, flags_Kmer)
 
         return total_loss / len(self.val_loader), auc, r2
 
+    def test_epoch(self, model):  # todo: remove. temp function
+        model.eval()
+        print('Test', end='\t    ')
+        with torch.no_grad():
+            total_loss, preds1, trues1, preds2, trues2, flags, flags_Kmer, freqs, _ = self.predict(model, self.test_loader, group='val')
+            print(f'Loss: {"%.7f" % round(total_loss / len(self.test_loader), 7)}  |', end='  ')
+
+        if self.split_score_by_freq:
+            auc, r2 = self.get_scores_by_freq(preds1, trues1, preds2, trues2, flags, freqs)
+        else:
+            auc, r2 = self.get_scores(preds1, trues1, preds2, trues2, flags, flags_Kmer, is_evaluate=True)
+
+        return total_loss / len(self.test_loader), auc, r2
+
     def evaluate(self, model):
         test_data = self.test_data
+        # remove those (binary negatives) that were created artificially
+        if self.flag_Kmer_header in test_data.columns:
+            test_data = test_data[test_data[self.flag_Kmer_header] != 0]
         test_data = self.split_to_all_Kmers_and_get_Kmer_with_max_score(test_data, model, is_evaluate=True)
 
         preds1 = list(test_data['Preds'])
@@ -448,12 +524,15 @@ class ModelWrapper:
         trues1 = list(test_data[self.binary_header])
         trues2 = list(test_data[self.cont_header])
         flags = list(test_data[self.flag_header])
+        flags_Kmer = list(test_data[self.flag_Kmer_header])
         freqs = list(test_data['Freqs'])
+
+        self.test_data = test_data  # for IEDB weekly evaluate
 
         if self.split_score_by_freq:
             _, _ = self.get_scores_by_freq(preds1, trues1, preds2, trues2, flags, freqs)
         else:
-            _, _ = self.get_scores(preds1, trues1, preds2, trues2, flags)
+            _, _ = self.get_scores(preds1, trues1, preds2, trues2, flags, flags_Kmer, do_precision_recall=True, is_evaluate=True)
 
     def set_core_with_max_pred(self, df, preds1, preds2, flags, ids, drop_preds):
         """
@@ -466,40 +545,57 @@ class ModelWrapper:
         # create one column with binary and continuous predictions.
         # continuous (preds2) are divided by 1 because lower values mean stronger binding
         df.loc[:, 'Preds'] = [preds1[i] if flags[i] == 0 else 1 / preds2[i] for i in range(len(flags))]
-        max_idx = df.groupby([self.ID_header], sort=False)['Preds'].idxmax()
-        df = df.iloc[max_idx, :]
+        max_idx = list(df.groupby([self.ID_header], sort=False)['Preds'].idxmax())
+
+        def create_flag_Kmer_column(_df):
+            # binary negative: if Kmer has highest pred, sign 1, else: 0
+            if _df[self.binary_header] == 0:
+                if _df.name in max_idx:
+                    return 1
+                else:
+                    return 0
+            # binary positive
+            elif _df[self.binary_header] == 1:
+                return 1
+            # continuous
+            elif _df[self.binary_header] == -1:
+                return -1
+
+        df.loc[:, self.flag_Kmer_header] = df.apply(create_flag_Kmer_column, axis=1)
+        df.loc[:, 'Index'] = df.index
+        df = df[(df[self.binary_header] == 0) | (df['Index'].isin(max_idx))]
+        df.drop(['Index'], axis=1, inplace=True)
         if drop_preds:
             df = df.drop(['Preds'], axis=1)
         return df
 
-    def split_to_all_Kmers_and_get_Kmer_with_max_score(self, data, model,
-                                                       update_loader=False, data_type=None, is_evaluate=False):
+    def split_to_all_Kmers_and_get_Kmer_with_max_score(self, data, model, is_evaluate=False):
         """
         For each sample in the data, extract all K-mers from the peptide sequence.
         Afterwards, run the model in "test" mode and get scores for all K-mers.
         Keep in the data the one with the highest score only.
         """
-        # split each positive sample to all K-mers
-        col_Kmer = pd.DataFrame(data.apply(self.createKmers, axis=1), columns=['Kmer'])  #todo: data['Kmer'] = ...
+        col_Kmer = pd.DataFrame(data.apply(self.createKmers, axis=1), columns=['Kmer'])
         data = pd.concat([data, col_Kmer], axis=1)
         data = self.split_Kmer_to_rows(data, Kmer_col_name='Kmer')
 
         # replace old core column with new (that contains the splitting Kmer)
-        data.drop([self.pepCore_header], axis=1, inplace=True)
+        if self.pepCore_header in data.columns:
+            data.drop([self.pepCore_header], axis=1, inplace=True)
         data.rename(columns={'Kmer': self.pepCore_header}, inplace=True)
 
-        # create dataloader for running data on the model
+        # add temp flag Kmer, for creating dataset, but has no effect, because run model with mode test
+        data.loc[:, self.flag_Kmer_header] = -1
+
         dataset = self.df2dataset(data)
         data_loader = self.createLoader(dataset, data_type='test')
-        if update_loader:
-            self.update_loader(data_loader, data_type)  # todo: check
 
         # run model
         if is_evaluate:
             print('\nTest\t\t ', end='\t')
         model.eval()
         with torch.no_grad():
-            _, preds1, _, preds2, _, flags, freqs, ids = self.predict(model, data_loader, group='test')
+            _, preds1, _, preds2, _, flags, _, freqs, ids = self.predict(model, data_loader, group='test')
 
         if is_evaluate:
             data.loc[:, 'Freqs'] = freqs
@@ -508,15 +604,43 @@ class ModelWrapper:
         data = self.set_core_with_max_pred(data, preds1, preds2, flags, ids, drop_preds)
         return data
 
+    def sign_negative_samples_that_have_max_score(self, data, model):  #todo: check
+        """
+        when updating new cores in the data, in negatives samples we keep all cores, and sign the one with highest score
+        (and do not remove the other, as we do in positive and continuous)
+        so here we run the negatives on the model, and sign those with highest score by flag Kmer column
+        """
+        data.reset_index(drop=True, inplace=True)
+        dataset = self.df2dataset(data)
+        data_loader = self.createLoader(dataset, data_type='test')
+
+        model.eval()
+        with torch.no_grad():
+            _, preds1, _, _, _, _, _, _, ids = self.predict(model, data_loader, group='test')
+
+        assert ids == list(data[self.ID_header])  # to ensure that preds are match to their samples
+
+        data.loc[:, 'Preds'] = preds1
+        max_idx = list(data.groupby([self.ID_header], sort=False)['Preds'].idxmax())
+        data[self.flag_Kmer_header] = data.apply(lambda row: 1 if row.name in max_idx else 0, axis=1)
+        data = data.drop(['Preds'], axis=1)
+        return data
+
     def create_plots(self, train_loss_list, val_loss_list, train_auc_list, val_auc_list,
                      train_r2_list, val_r2_list, epochs_num):
         plot_loss(train_loss_list, val_loss_list, epochs_num, self.res_path)
         plot_auc(train_auc_list, val_auc_list, epochs_num, self.res_path)
         plot_r2(train_r2_list, val_r2_list, epochs_num, self.res_path)
 
+    # todo: temp. remove
+    def temp_create_plots(self, train_loss_list, val_loss_list, test_loss_list, train_auc_list, val_auc_list,
+                                   test_auc_list, train_r2_list, val_r2_list, test_r2_list, epochs_num):
+        temp_plot_loss(train_loss_list, val_loss_list, test_loss_list, epochs_num, self.res_path)
+        temp_plot_auc(train_auc_list, val_auc_list, test_auc_list, epochs_num, self.res_path)
+
     def run_test(self):
         pep_model = get_existing_model(self.pep_model_dict, model_name='pep')
-        hla_model = get_existing_model(self.HLA_model_dict, model_name='hla', is_test=True)
+        hla_model = get_existing_model(self.HLA_model_dict, model_name='hla', max_len_hla=self.max_len_hla, is_test=True)
         combined_model_dict = load_model_dict(self.combined_model_path, self.cuda_num)
         model = get_combined_model(hla_model, self.HLA_model_dict, pep_model, self.pep_model_dict,
                                    combined_model_dict, self.architect_params)
@@ -534,52 +658,40 @@ class ModelWrapper:
         Run the data without core on the model, get the predicted core, and merge it with the original data
         """
         print('Adding data without core ...')
-        x_test, y_test = None, None
-        new_data = self.data_without_core
-
-        new_data = self.split_to_all_Kmers_and_get_Kmer_with_max_score(new_data, model)
-
-        new_x, new_y = self.data_to_features_and_labels(new_data)
-        new_x_train, new_y_train, new_x_val, new_y_val, new_x_test, new_y_test = self.split_data(new_x, new_y)
-
-        x_train, y_train = self.data_to_features_and_labels(self.train_data)
-        x_val, y_val = self.data_to_features_and_labels(self.train_data)
-        if self.test_data is not None:
-            x_test, y_test = self.data_to_features_and_labels(self.test_data)
-
-        x_train = np.concatenate([x_train, new_x_train])
-        y_train = np.concatenate([y_train, new_y_train])
-        x_val = np.concatenate([x_val, new_x_val])
-        y_val = np.concatenate([y_val, new_y_val])
-        if self.test_data is not None:
-            x_test = np.concatenate([x_test, new_x_test])
-            y_test = np.concatenate([y_test, new_y_test])
-
-        self.create_dataLoaders(x_train, y_train, x_val, y_val, x_test, y_test)
+        for descrip, orig_data in zip(['train', 'val', 'test'], [self.train_data, self.val_data, self.test_data]):
+            new_data = self.data_without_core[descrip]
+            if new_data is None or orig_data is None:
+                continue
+            new_data = self.split_to_all_Kmers_and_get_Kmer_with_max_score(new_data, model)
+            data = pd.concat([orig_data, new_data], sort=True)
+            data = data.sample(frac=1).reset_index(drop=True)  # shuffle and reset index
+            self.create_dataLoaders(data, descrip)
 
     def update_new_cores(self, model):
-        def split_pos_neg(_data):
+        """
+        every X epochs (X = self.update_core_freq), update new cores (Kmers) for all samples.
+        in positive and continuous, run on model and keep only those with highest binding score.
+        in negative, run on model and sign those with highest score (but keep all Kmer).
+        """
+        def split_pos_cont_neg(_df):
             """
-            split data to positive (binary=1 or continuous <=500)
-            and negative (binary=0 or continuous > 500) dataframes
+            split data to negatives and other (positives + continuous)
             """
-            _pos = _data[(_data[self.binary_header] == 1) |
-                         ((-1 < _data[self.cont_header]) & (_data[self.cont_header] <= 500))]
-            _neg = _data[(_data[self.binary_header] == 0) | (_data[self.cont_header] > 500)]
-            return _pos, _neg
+            _pos_and_cont = _df[(_df[self.binary_header] == 1) | (_df[self.binary_header] == -1)]
+            _neg = _df[_df[self.binary_header] == 0]
+
+            return _pos_and_cont, _neg
 
         print('Updating new cores ...')
-        # for data_type in ['train', 'val']:
-        for data_type in ['train']:
+        for data_type in ['train', 'val']:
             data = self.train_data if data_type == 'train' else self.val_data
 
-            # updating done on positive only
-            pos, neg = split_pos_neg(data)
+            pos_and_cont, neg = split_pos_cont_neg(data)
+            pos_and_cont = self.split_to_all_Kmers_and_get_Kmer_with_max_score(pos_and_cont, model)
+            neg = self.sign_negative_samples_that_have_max_score(neg, model)
 
-            pos = self.split_to_all_Kmers_and_get_Kmer_with_max_score(pos, model, update_loader=True, data_type=data_type)
-
-            # for next epoch: merge negative + updated positive to one dataframe, create loader and save both
-            data = pd.concat([pos, neg], axis=0, sort=True)
+            # for next epoch: merge samples to one dataframe, create loader and save both
+            data = pd.concat([pos_and_cont, neg], axis=0, sort=True)
             data = data.sample(frac=1).reset_index(drop=True)  # shuffle and reset index
             data = data[self.headers]  # reorder columns
             self.update_data(data, data_type)
@@ -589,12 +701,8 @@ class ModelWrapper:
             self.update_loader(loader, data_type)
 
     def run_model(self):
-        if self.allele == 'DRB1':
-            max_len_hla = 266
-        elif self.allele == 'DQB1':
-            max_len_hla = 261
         pep_model = get_existing_model(self.pep_model_dict, model_name='pep')
-        hla_model = get_existing_model(self.HLA_model_dict, model_name='hla', max_len_hla=max_len_hla)
+        hla_model = get_existing_model(self.HLA_model_dict, model_name='hla', max_len_hla=self.max_len_hla)
 
         if self.freeze_weight_AEs:
             for param in list(pep_model.parameters()) + list(hla_model.parameters()):
@@ -611,10 +719,10 @@ class ModelWrapper:
         model.to(self.device)
         self.optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()),
                                     lr=self.optim_params['lr'], weight_decay=self.optim_params['weight_decay'])
-
-        train_loss_list, val_loss_list = [], []
-        train_auc_list, val_auc_list = [], []
-        train_r2_list, val_r2_list = [], []
+        # todo: remove test lists
+        train_loss_list, val_loss_list, test_loss_list = [], [], []
+        train_auc_list, val_auc_list, test_auc_list = [], [], []
+        train_r2_list, val_r2_list, test_r2_list = [], [], []
         min_loss = float('inf')
         max_auc = 0
         counter = 0
@@ -624,9 +732,14 @@ class ModelWrapper:
             print(f'--------------------- Epoch: {epoch}/{self.epochs} ----------------------')
             train_loss, train_auc, train_r2 = self.train_epoch(model)
             val_loss, val_auc, val_r2 = self.validation_epoch(model)
+            if self.mode != 'nni':
+                test_loss, test_auc, test_r2 = self.test_epoch(model)  # todo: temp
 
-            lists = [train_loss_list, train_auc_list, train_r2_list, val_loss_list, val_auc_list, val_r2_list]
+            lists = [train_loss_list, train_auc_list, train_r2_list, val_loss_list, val_auc_list, val_r2_list,]
             values = [train_loss, train_auc, train_r2, val_loss, val_auc, val_r2]
+            if self.mode != 'nni':  # todo: remove
+                lists.extend([test_loss_list, test_auc_list, test_r2_list])
+                values.extend([test_loss, test_auc, test_r2])
             for lst, val in zip(lists, values):
                 lst.append(val)
 
@@ -635,7 +748,7 @@ class ModelWrapper:
                 min_loss = val_loss
                 counter = 0
                 best_model = copy.deepcopy(model)
-            elif counter == 30:
+            elif counter == 200:  # todo: change to 30?
                 break
             else:
                 counter += 1
@@ -643,21 +756,24 @@ class ModelWrapper:
             if min(train_auc, val_auc) > max_auc:
                 max_auc = min(train_auc, val_auc)
 
-            if self.run_category == 'nni':
+            if self.mode == 'nni':
                 nni.report_intermediate_result(max_auc)
 
-            if epoch == self.epoch_to_add_noCore_data and self.data_without_core is not None:
+            if epoch == self.epoch_to_add_noCore_data and not all(x is None for x in self.data_without_core.values()):
                 self.add_noCore_data(model)
 
             if epoch % self.update_core_freq == 0:
                 self.update_new_cores(model)
 
-        if self.run_category == 'nni':
+        if self.mode == 'nni':
             nni.report_final_result(max_auc)
 
-        if self.run_category == 'classic':
-            self.create_plots(train_loss_list, val_loss_list, train_auc_list, val_auc_list,
-                              train_r2_list, val_r2_list, epoch)
+        if self.mode == 'classic':
+            # todo: change to create_plots
+            # self.create_plots(train_loss_list, val_loss_list, train_auc_list, val_auc_list,
+            #                   train_r2_list, val_r2_list, epoch)
+            self.temp_create_plots(train_loss_list, val_loss_list, test_loss_list, train_auc_list, val_auc_list,
+                                   test_auc_list, train_r2_list, val_r2_list, test_r2_list, epoch)
         return best_model
 
 
@@ -667,11 +783,11 @@ if __name__ == '__main__':
     model_wrapper = ModelWrapper(PARAMETERS)
     model_wrapper.processing()
 
-    if model_wrapper.run_category == 'classic':
+    if model_wrapper.mode == 'classic':
         BEST_MODEL = model_wrapper.run_model()
         model_wrapper.evaluate(BEST_MODEL)
         model_wrapper.save_model(BEST_MODEL)
-    elif model_wrapper.run_category == 'nni':
+    elif model_wrapper.mode == 'nni':
         _ = model_wrapper.run_model()
-    elif model_wrapper.run_category == 'test':
+    elif model_wrapper.mode == 'test':
         model_wrapper.run_test()
