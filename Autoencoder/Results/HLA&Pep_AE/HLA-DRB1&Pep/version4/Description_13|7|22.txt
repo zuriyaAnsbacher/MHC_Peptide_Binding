@@ -1,0 +1,38 @@
+Script:
+    HLA-II_Pep_model_2output.py
+
+Hyper-parameters:
+    same as 'HLA-A&Pep/version5_emb_afterNNI/Description_6|3|22.txt'
+    early stopping counter: 60
+    pep_optional_len: [9]
+    pep_core: 9
+    update_core_freq: 10
+    epoch_to_add_noCore_data: 8
+
+Model details:
+    as 'HLA-DQB1&Pep/version2/Description_11|7|22.txt'
+    (with the pos-neg-continuous, and split data)
+
+Data file:
+    mhc_pep_00-05_DRB1_withCore9.csv
+    same processing like before, just without filter by peptide length.
+    finally, contains 240545 pairs of pep-hla.
+    There are duplicate but I didn't remove them (only ensure in split data that pair of hla-pep won't be in 2 groups)
+
+Results:
+    --------------------- Epoch: 326/400 ----------------------
+    Train		Loss: 0.2803764  |  AUC: 0.9698  |  R2: 0.4373
+    Validation	Loss: 0.3080994  |  AUC: 0.9473  |  R2: 0.3568
+    Test	    Loss: 0.3733427  |  AUC: 0.9707  |  R2: 0.1085
+
+    Test	AUC: 0.9892  |  R2: -0.0002
+    Threshold 0.1:
+    Precision: 0.8095  | Recall: 0.9916
+    Threshold 0.2:
+    Precision: 0.8641  | Recall: 0.9824
+    Threshold 0.3:
+    Precision: 0.8952  | Recall: 0.9716
+    Threshold 0.4:
+    Precision: 0.9194  | Recall: 0.9601
+    Threshold 0.5:
+    Precision: 0.9390  | Recall: 0.9463

@@ -1,0 +1,13 @@
+Same as '../HLA-DRB1&Pep/version2/Description_12|6|22.txt' in script, hyper-parameters and model details
+
+Data file:
+    mhc_pep_00-05_DQB1_withCore9.csv
+    same processing like before, just without filter by peptide length.
+    finally, contains 3731 pairs of pep-hla.
+
+Results:
+    --------------------- Epoch: 150/150 ----------------------
+    Train		Loss: 0.0814199  |  AUC: 0.9934  |  R2: 0.7636
+    Validation	Loss: 0.0612368  |  AUC: 0.9944  |  R2: 0.8285
+
+    Test		 	AUC: 0.8767  |  R2: -0.3276

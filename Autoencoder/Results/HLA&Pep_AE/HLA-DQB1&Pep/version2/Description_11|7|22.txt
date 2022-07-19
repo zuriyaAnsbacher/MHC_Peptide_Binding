@@ -1,0 +1,43 @@
+Similar to 'HLA-DRB1&Pep/version3/Description_6|7|22.txt'
+
+but I change the treatment in positive-negative-continuous:
+
+                  binary                              |                    continuous
+----------------------------------------------------------------------------------------------------------
+positive                     |       negative         |         positive         |       negative
+----------------------------------------------------------------------------------------------------------
+with core   | no core        | with core  | no core   | with core  | no core     | with core  | no core
+            |                |  (split to all KMers)  |                          |
+----------------------------------------------------------------------------------------------------------
+CASE A:     |CASE B:         |CASE C:     |like       |like CASE A |like CASE B  |like CASE A |like CASE B
+insert to   |after X epochs, |sign in     |CASE A,    |            |             |            |
+data and    |get best Kmer   |orig data   |(just sign |            |             |            |
+every Y     |and merge       |flag=1 on   | best Kmer |            |             |            |
+epochs,     |(and every Y,   |best Kmer   |instead of |            |             |            |
+update core |update)         |(and every  |replace)   |            |             |            |
+            |                |Y update)   |           |            |             |            |
+-----------------------------------------------------------------------------------------------------------
+
+
+And I changed train-val-test split so that pair of hla-pep can't be in 2 groups.
+
+Results:
+    --------------------- Epoch: 229/400 ----------------------
+    Train         Loss: 0.3376583  |  AUC: 0.9830  |  R2: 0.7155
+    Validation    Loss: 0.4834837  |  AUC: 0.7669  |  R2: 0.3100
+    Test          Loss: 0.7611685  |  AUC: 0.7610  |  R2: -0.5643
+
+    Test            AUC: 0.9599  |  R2: -0.3238
+    Threshold 0.1:
+    Precision: 0.3959  | Recall: 0.9006
+    Threshold 0.2:
+    Precision: 0.4742  | Recall: 0.8070
+    Threshold 0.3:
+    Precision: 0.5507  | Recall: 0.7310
+    Threshold 0.4:
+    Precision: 0.6416  | Recall: 0.6491
+    Threshold 0.5:
+    Precision: 0.6934  | Recall: 0.5556
+
+
+

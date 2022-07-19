@@ -1,0 +1,52 @@
+Script:
+    HLA-II_Pep_model_2output.py
+
+Hyper-parameters:
+    same as 'HLA-A&Pep/version5_emb_afterNNI/Description_6|3|22.txt'
+    early stopping counter: 60
+    pep_optional_len: [9]
+    pep_core: 9
+    update_core_freq: 10
+    epoch_to_add_noCore_data: 8
+
+Model details:
+    same as 'HLA-DRB1&Pep/version2/Description_12|6|22.txt', with additional details:
+    1. drop duplicates
+    2. split to train-val-test before the other processing
+    3. the processing contains these steps:
+        (a) split negatives to all Kmers (-this was also in the previous model, I just didn't mention)
+        (b) keep aside samples without core (-this was in previous, just not split to train-val-test)
+        (c) choose best kmer from negatives randomly (new in this model. generally, there is an additional loss function,
+            that the samples that inserted it are not the best Kmers positive + all negative, but best positive +
+            "best" negative (not really best, just those with highest score, for make it harder to the model).
+            so in the beginning we do not know which negative are with highest scores, so chose randomly (but keep all
+            Kmers derived from negatives).
+    4. in 'run_model', similar to previous model, just with the difference mentioned above: additional loss with "best"
+       negative (and best positive)
+    5. and also I added the test throughout the learning process.
+
+Data file:
+    mhc_pep_00-05_DRB1_withCore9.csv
+    same processing like before, just without filter by peptide length.
+    finally, contains 240545 pairs of pep-hla. (some of them duplicated, so remove them in this model. after that, there are 154785)
+
+Results:
+    --------------------- Epoch: 135/1000 ----------------------
+    Train         Loss: 0.3528526  |  AUC: 0.9368  |  R2: 0.3446
+    Validation    Loss: 0.3754902  |  AUC: 0.9041  |  R2: 0.3321
+    Test          Loss: 0.4285270  |  AUC: 0.9508  |  R2: 0.3234
+
+    Test          AUC: 0.9049  |  R2: -0.0308
+
+    Threshold 0.1:
+    Precision: 0.8235  | Recall: 0.9846
+    Threshold 0.2:
+    Precision: 0.8479  | Recall: 0.9698
+    Threshold 0.3:
+    Precision: 0.8681  | Recall: 0.9540
+    Threshold 0.4:
+    Precision: 0.8872  | Recall: 0.9370
+    Threshold 0.5:
+    Precision: 0.9040  | Recall: 0.9133
+
+
