@@ -28,7 +28,8 @@ class CNN_Encoder(nn.Module):
 
         self.size_after_conv = self.calculate_size_after_conv()
 
-        self.embedding = nn.Embedding(self.vocab_size, self.embedding_dim, padding_idx=-1)
+        # self.embedding = nn.Embedding(self.vocab_size, self.embedding_dim, padding_idx=-1)
+        self.embedding = nn.Embedding(self.vocab_size, self.embedding_dim, padding_idx=0)  # self.vocab_size+1 in 15 positions
         self.conv1 = nn.Sequential(
             nn.Conv2d(1, self.filter1, kernel_size=(self.kernel1, self.kernel2), padding=0),
             nn.ReLU(),
@@ -46,8 +47,10 @@ class CNN_Encoder(nn.Module):
         )
         self.fc2 = nn.Linear(512, self.encoding_dim)
 
-    def forward(self, x):
+    def forward(self, x, position=None):
         x = self.embedding(x.long())
+        if position is not None:
+            x = self.nullify_single_position(x, position)
         # input size to Conv2d: (batch, number channels, height, width)
         x = x.view(x.size()[0], self.embedding_dim, -1).unsqueeze(1)
         x = self.conv1(x)
@@ -76,6 +79,11 @@ class CNN_Encoder(nn.Module):
         y_size = ((y_size - 2) // 2) + 1
 
         return x_size * y_size * self.filter2
+
+    def nullify_single_position(self, x, position):
+        zeros = torch.zeros(1, self.embedding_dim)
+        x[:, position, :] = zeros
+        return x
 
 
 class CNN_Decoder(nn.Module):
@@ -115,8 +123,8 @@ class CNN_AE(nn.Module):
         self.encoder = CNN_Encoder(self.max_len, self.encoding_dim, self.batch_size, self.model_params)
         self.decoder = CNN_Decoder(self.max_len, self.encoding_dim, self.model_params)
 
-    def forward(self, x):
-        encoded = self.encoder(x)
+    def forward(self, x, position=None):
+        encoded = self.encoder(x, position)
         decoded = self.decoder(encoded)
         return encoded, decoded
 
@@ -194,7 +202,8 @@ class HLA_Pep_Model(nn.Module):
                  concat_type='None', concat_oneHot_dim=None, concat_emb_dim=None):
         super().__init__()
 
-        self.hidden_size = model_params['hidden_size']
+        self.hidden_size1 = model_params['hidden_size1'] if 'hidden_size1' in model_params else model_params['hidden_size']
+        self.hidden_size2 = model_params['hidden_size2'] if 'hidden_size2' in model_params else None
         self.activ_func = model_params['activ_func']
         self.dropout = model_params['dropout']
         self.encoding_dim_pep = encoding_dim_pep
@@ -211,16 +220,27 @@ class HLA_Pep_Model(nn.Module):
                                   self.concat_oneHot_dim + self.concat_emb_dim  # at least one from the 2 lasts is 0
 
         self.fc1 = nn.Sequential(
-            nn.Linear(self.encoded_layer_size, self.hidden_size),
+            nn.Linear(self.encoded_layer_size, self.hidden_size1),
             self.activ_func,
             nn.Dropout(self.dropout),
         )
-        self.fc2A = nn.Linear(self.hidden_size, 1)
-        self.fc2B = nn.Linear(self.hidden_size, 1)
 
-    def forward(self, pep, hla, hla_oneHot=None, emb=None):
+        if self.hidden_size2 is None:
+            self.fc2A = nn.Linear(self.hidden_size1, 1)
+            self.fc2B = nn.Linear(self.hidden_size1, 1)
+
+        else:
+            self.fc2 = nn.Sequential(
+                nn.Linear(self.hidden_size1, self.hidden_size2),
+                self.activ_func
+            )
+
+            self.fc3A = nn.Linear(self.hidden_size2, 1)
+            self.fc3B = nn.Linear(self.hidden_size2, 1)
+
+    def forward(self, pep, hla, hla_oneHot=None, emb=None, position=None):
         pep_encoded, _ = self.pep_AE(pep)
-        hla_encoded, _ = self.hla_AE(hla)
+        hla_encoded, _ = self.hla_AE(hla, position)
 
         if self.concat_type == 'emb':
             emb = self.concat_embedding(emb.long())
@@ -235,8 +255,14 @@ class HLA_Pep_Model(nn.Module):
             x = torch.cat((pep_encoded, self.zero_hla_seq(hla_encoded, hla_oneHot), hla_oneHot), dim=1)
 
         x = self.fc1(x)
-        y1 = self.fc2A(x)
-        y2 = self.fc2B(x)
+
+        if self.hidden_size2 is None:
+            y1 = self.fc2A(x)
+            y2 = self.fc2B(x)
+        else:
+            x = self.fc2(x)
+            y1 = self.fc3A(x)
+            y2 = self.fc3B(x)
 
         return y1, y2
 
