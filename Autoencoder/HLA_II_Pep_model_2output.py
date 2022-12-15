@@ -71,6 +71,7 @@ class ModelWrapper:
         self.noCore_sign = params.get("noCore_sign", "unknown")
 
         # ----- flags -----
+        self.positions = params.get("positions", 266)
         self.split_score_by_freq = params.get("split_score_by_freq", False)
         self.loss_weighted_by_freq = params.get("loss_weighted_by_freq", False)
         self.freeze_weight_AEs = params.get("freeze_weight_AEs", False)
@@ -121,10 +122,16 @@ class ModelWrapper:
         """
         Best params from NNI
         """
-        optim_params = {'lr': 1e-3, 'weight_decay': 7e-7, 'alpha': 0.6}
-        if self.transfer_learning:
-            optim_params['lr'] = 1e-4
-        architect_params = {'hidden_size': 128, 'activ_func': nn.ReLU(), 'dropout': 0.2}
+        if self.allele == 'DRB1':
+            optim_params = {'lr': 1e-3, 'weight_decay': 7e-7, 'alpha': 0.6}
+            # if self.transfer_learning:
+            #     optim_params['lr'] = 1e-4
+            architect_params = {'hidden_size': 128, 'activ_func': nn.ReLU(), 'dropout': 0.2}
+        elif self.allele == 'DQB1':
+            optim_params = {'lr': 1e-4, 'weight_decay': 7e-5, 'alpha': 0.6}
+            architect_params = {'hidden_size': 128, 'activ_func': nn.ReLU(), 'dropout': 0.3}
+        else:
+            raise KeyError('self.allele must to be DRB1/DQB1 only')
 
         return optim_params, architect_params
 
@@ -217,6 +224,23 @@ class ModelWrapper:
 
         return data
 
+    def remove_positions_from_hla(self, data):
+        important_positions = [8, 10, 12, 25, 27, 29, 46, 56, 66, 69, 70, 73, 76, 77, 80, 84, 85, 88, 89]
+        all_positions = list(range(self.max_len_hla))
+        unimportant_positions = [i for i in all_positions if i not in important_positions]
+        df_hla = data[self.HLA_seq_header]
+        # split each hla by ',' : G,S,H..
+        df_hla = pd.DataFrame(df_hla.apply(lambda row: ','.join(map(str, row))))
+        # split each letter to a separate column
+        df_hla[list(range(self.max_len_hla))] = df_hla[self.HLA_seq_header].str.split(",", expand=True)
+        df_hla.drop([self.HLA_seq_header], inplace=True, axis=1)
+        # remove unimportant positions
+        df_hla = df_hla.loc[:, ~df_hla.columns.isin(unimportant_positions)]
+        # back to sequences
+        df_hla.loc[:, 'new_seq'] = df_hla[df_hla.columns].apply(lambda row: ''.join(row), axis=1)
+        data[self.HLA_seq_header] = df_hla['new_seq']
+        return data
+
     def split_data(self, data):
         """
         split data to train-validation-test, such that a pair of mhc-pep will not exist in 2 groups.
@@ -298,7 +322,7 @@ class ModelWrapper:
         elif data_type == 'test':
             self.test_loader = loader
         else:
-            raise KeyError('data_type has to be one of the following: "train"/"val"')
+            raise KeyError('data_type has to be one of the following: "train"/"val"/"test"')
 
     def calculate_var(self, train):
         """
@@ -328,6 +352,9 @@ class ModelWrapper:
         print('Loading data ...')
 
         data = pd.read_csv(self.datafile)
+        if self.positions == 19:
+            data = self.remove_positions_from_hla(data)
+
         if self.mode != 'test':
             train, val, test = self.split_data(data)
             for descrip, dataset in zip(['train', 'val', 'test'], [train, val, test]):
@@ -464,6 +491,7 @@ class ModelWrapper:
 
             auc = roc_auc_score(_trues1, _preds1)
             r2 = r2_score(_trues2, _preds2)
+
             print(f'Case: {case}. AUC: {"%.4f" % round(auc, 4)} | R2: {"%.4f" % round(r2, 4)}')
             if case == 'high':
                 auc_high, r2_high = auc, r2
@@ -604,7 +632,7 @@ class ModelWrapper:
         data = self.set_core_with_max_pred(data, preds1, preds2, flags, ids, drop_preds)
         return data
 
-    def sign_negative_samples_that_have_max_score(self, data, model):  #todo: check
+    def sign_negative_samples_that_have_max_score(self, data, model):  # todo: check
         """
         when updating new cores in the data, in negatives samples we keep all cores, and sign the one with highest score
         (and do not remove the other, as we do in positive and continuous)
@@ -639,8 +667,9 @@ class ModelWrapper:
         temp_plot_auc(train_auc_list, val_auc_list, test_auc_list, epochs_num, self.res_path)
 
     def run_test(self):
+        len_hla = 19 if self.positions == 19 else self.max_len_hla
         pep_model = get_existing_model(self.pep_model_dict, model_name='pep')
-        hla_model = get_existing_model(self.HLA_model_dict, model_name='hla', max_len_hla=self.max_len_hla, is_test=True)
+        hla_model = get_existing_model(self.HLA_model_dict, model_name='hla', max_len_hla=len_hla, is_test=True)
         combined_model_dict = load_model_dict(self.combined_model_path, self.cuda_num)
         model = get_combined_model(hla_model, self.HLA_model_dict, pep_model, self.pep_model_dict,
                                    combined_model_dict, self.architect_params)
@@ -701,8 +730,9 @@ class ModelWrapper:
             self.update_loader(loader, data_type)
 
     def run_model(self):
+        len_hla = 19 if self.positions == 19 else self.max_len_hla
         pep_model = get_existing_model(self.pep_model_dict, model_name='pep')
-        hla_model = get_existing_model(self.HLA_model_dict, model_name='hla', max_len_hla=self.max_len_hla)
+        hla_model = get_existing_model(self.HLA_model_dict, model_name='hla', max_len_hla=len_hla)
 
         if self.freeze_weight_AEs:
             for param in list(pep_model.parameters()) + list(hla_model.parameters()):
@@ -729,7 +759,7 @@ class ModelWrapper:
         best_model = 'None'
 
         for epoch in range(1, self.epochs + 1):
-            print(f'--------------------- Epoch: {epoch}/{self.epochs} ----------------------')
+            print(f'-------------------- Epoch: {epoch}/{self.epochs} ---------------------')
             train_loss, train_auc, train_r2 = self.train_epoch(model)
             val_loss, val_auc, val_r2 = self.validation_epoch(model)
             if self.mode != 'nni':
@@ -768,18 +798,20 @@ class ModelWrapper:
         if self.mode == 'nni':
             nni.report_final_result(max_auc)
 
-        if self.mode == 'classic':
-            # todo: change to create_plots
-            # self.create_plots(train_loss_list, val_loss_list, train_auc_list, val_auc_list,
-            #                   train_r2_list, val_r2_list, epoch)
-            self.temp_create_plots(train_loss_list, val_loss_list, test_loss_list, train_auc_list, val_auc_list,
-                                   test_auc_list, train_r2_list, val_r2_list, test_r2_list, epoch)
+        # if self.mode == 'classic':
+        #     # todo: change to create_plots
+        #     # self.create_plots(train_loss_list, val_loss_list, train_auc_list, val_auc_list,
+        #     #                   train_r2_list, val_r2_list, epoch)
+        #     self.temp_create_plots(train_loss_list, val_loss_list, test_loss_list, train_auc_list, val_auc_list,
+        #                            test_auc_list, train_r2_list, val_r2_list, test_r2_list, epoch)
         return best_model
 
 
 if __name__ == '__main__':
+
     with open('Parameters/HLA-II_Pep_parameters.json') as f:
         PARAMETERS = json.load(f)
+
     model_wrapper = ModelWrapper(PARAMETERS)
     model_wrapper.processing()
 
